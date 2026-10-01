@@ -1,0 +1,943 @@
+import {
+  supabase, isConfigured, REASONS, STATUSES, esc, fmtDateTime, fmtDate, fmtTime, timeAgo,
+  toLocalInput, fromLocalInput, fmtAmount, errMsg,
+} from './shared.js';
+import { ORG_NAME, ORG_PHONE } from './config.js';
+
+const $ = (sel, el = document) => el.querySelector(sel);
+const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
+
+const state = {
+  user: null,
+  me: null,
+  isAdmin: false,
+  clients: [],
+  requests: [],
+  resources: [],
+  transactions: [],
+  audit: [],
+  staff: [],
+  filter: 'open',
+  search: '',
+  clientSearch: '',
+  tab: 'requests',
+  openRequestId: null,
+  drawerDirty: false,
+};
+
+const OPEN = ['submitted', 'in_review', 'approved'];
+const clientById = (id) => state.clients.find((c) => c.id === id);
+const resourceById = (id) => state.resources.find((r) => r.id === id);
+const clientName = (c) => (c ? `${c.first_name} ${c.last_name || ''}`.trim() : 'Unknown client');
+
+// ---------------------------------------------------------------------
+// Screens and sign-in
+// ---------------------------------------------------------------------
+
+function show(id) {
+  for (const el of $$('[id^="screen-"]')) el.hidden = el.id !== id;
+}
+
+function boot() {
+  if (!isConfigured) return show('screen-setup');
+
+  const hash = new URLSearchParams(location.hash.slice(1));
+  const oauthError = hash.get('error_description') || new URLSearchParams(location.search).get('error_description');
+  if (oauthError) {
+    $('#login-error').textContent = oauthError;
+    $('#login-error').hidden = false;
+  }
+
+  supabase.auth.onAuthStateChange((event, session) => {
+    if (session && !state.user) {
+      setTimeout(() => enter(session), 0);
+    } else if (!session) {
+      if (state.user) location.reload();
+      else show('screen-login');
+    }
+  });
+
+  $('#btn-google').addEventListener('click', async () => {
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: location.origin + location.pathname, queryParams: { prompt: 'select_account' } },
+    });
+    if (error) {
+      $('#login-error').textContent = errMsg(error);
+      $('#login-error').hidden = false;
+    }
+  });
+
+  document.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-action="sign-out"]')) {
+      await supabase.auth.signOut();
+      location.reload();
+    }
+  });
+}
+
+async function enter(session) {
+  state.user = session.user;
+  const email = (session.user.email || '').toLowerCase();
+  const { data: me, error } = await supabase.from('staff').select('*').eq('email', email).maybeSingle();
+  if (error || !me) {
+    $('#denied-email').textContent = email;
+    return show('screen-denied');
+  }
+  state.me = me;
+  state.isAdmin = me.role === 'admin';
+  $('#user-email').textContent = email;
+  $('#tab-staff').hidden = !state.isAdmin;
+  if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+  show('screen-app');
+  wireApp();
+  await loadAll();
+  subscribe();
+}
+
+// ---------------------------------------------------------------------
+// Data
+// ---------------------------------------------------------------------
+
+async function loadAll() {
+  const [clients, requests, resources, transactions, audit, staff] = await Promise.all([
+    supabase.from('clients').select('*').order('first_name'),
+    supabase.from('ride_requests').select('*').order('pickup_at', { ascending: true }).limit(2000),
+    supabase.from('resource_balances').select('*').order('name'),
+    supabase.from('resource_transactions').select('*')
+      .order('occurred_on', { ascending: false }).order('created_at', { ascending: false }).limit(500),
+    supabase.from('audit_log').select('*').order('changed_at', { ascending: false }).limit(300),
+    supabase.from('staff').select('*').order('created_at'),
+  ]);
+  const failed = [clients, requests, resources, transactions, audit, staff].find((r) => r.error);
+  if (failed) toast(`Could not load data: ${errMsg(failed.error)}`, 'error');
+
+  state.clients = clients.data || [];
+  state.requests = requests.data || [];
+  state.resources = resources.data || [];
+  state.transactions = transactions.data || [];
+  state.audit = audit.data || [];
+  state.staff = staff.data || [];
+  renderAll();
+}
+
+let reloadTimer;
+function scheduleReload() {
+  clearTimeout(reloadTimer);
+  reloadTimer = setTimeout(loadAll, 250);
+}
+
+// Live updates: any change anywhere reloads the data for everyone signed in.
+function subscribe() {
+  supabase
+    .channel('dashboard')
+    .on('postgres_changes', { event: '*', schema: 'public' }, (payload) => {
+      if (payload.table === 'ride_requests' && payload.eventType === 'INSERT') {
+        const id = payload.new.id;
+        setTimeout(() => {
+          const req = state.requests.find((r) => r.id === id);
+          const c = req && clientById(req.client_id);
+          toast(`New ride request from ${c ? clientName(c) : 'a client'}. Click to open.`, 'new', () => openRequest(id));
+        }, 600);
+      }
+      scheduleReload();
+    })
+    .subscribe();
+
+  // Backup in case the live connection drops: refresh on focus and every minute.
+  window.addEventListener('focus', scheduleReload);
+  setInterval(scheduleReload, 60000);
+}
+
+// ---------------------------------------------------------------------
+// UI plumbing
+// ---------------------------------------------------------------------
+
+function wireApp() {
+  $$('.tab').forEach((t) => t.addEventListener('click', () => setTab(t.dataset.tab)));
+
+  $('#request-search').addEventListener('input', (e) => { state.search = e.target.value.toLowerCase(); renderRequests(); });
+  $('#client-search').addEventListener('input', (e) => { state.clientSearch = e.target.value.toLowerCase(); renderClients(); });
+
+  document.addEventListener('click', (e) => {
+    const closeBtn = e.target.closest('[data-close]');
+    if (closeBtn) closeBtn.closest('dialog').close();
+    const act = e.target.closest('[data-action]')?.dataset.action;
+    if (act === 'new-client') openClientForm();
+    if (act === 'new-resource') openResourceForm();
+    if (act === 'new-transaction') openTransactionForm();
+    if (act === 'new-staff') openStaffForm();
+  });
+
+  for (const dlg of $$('dialog')) {
+    dlg.addEventListener('click', (e) => { if (e.target === dlg) dlg.close(); });
+  }
+  $('#dlg-request').addEventListener('close', () => { state.openRequestId = null; state.drawerDirty = false; });
+  $('#dlg-request').addEventListener('input', () => { state.drawerDirty = true; });
+
+  $('#form-client').addEventListener('submit', saveClient);
+  $('#form-resource').addEventListener('submit', saveResource);
+  $('#form-transaction').addEventListener('submit', saveTransaction);
+  $('#form-staff').addEventListener('submit', saveStaff);
+  $('#form-transaction [name="resource_id"]').addEventListener('change', syncTxLabel);
+
+  const initial = location.hash.replace('#', '');
+  setTab(['requests', 'clients', 'resources', 'activity', 'staff'].includes(initial) ? initial : 'requests');
+}
+
+function setTab(tab) {
+  if (tab === 'staff' && !state.isAdmin) tab = 'requests';
+  state.tab = tab;
+  $$('.tab').forEach((t) => t.setAttribute('aria-selected', String(t.dataset.tab === tab)));
+  $$('[data-panel]').forEach((p) => { p.hidden = p.dataset.panel !== tab; });
+  history.replaceState(null, '', `#${tab}`);
+}
+
+function toast(message, type = '', onClick) {
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.textContent = message;
+  if (onClick) { el.style.cursor = 'pointer'; el.addEventListener('click', () => { onClick(); el.remove(); }); }
+  $('#toasts').append(el);
+  setTimeout(() => el.remove(), type === 'new' ? 12000 : 5000);
+}
+
+function formError(form, message) {
+  const el = $('.form-error', form);
+  el.textContent = message || '';
+  el.hidden = !message;
+}
+
+async function withBusy(btn, fn) {
+  btn.disabled = true;
+  try { return await fn(); } finally { btn.disabled = false; }
+}
+
+function confirmDialog(message, confirmLabel = 'Confirm', danger = false) {
+  return new Promise((resolve) => {
+    const dlg = document.createElement('dialog');
+    dlg.innerHTML = `
+      <div class="dialog-body">
+        <p>${esc(message)}</p>
+        <div class="form-actions">
+          <button class="btn" value="no">Cancel</button>
+          <button class="btn ${danger ? 'danger solid' : 'primary'}" value="yes">${esc(confirmLabel)}</button>
+        </div>
+      </div>`;
+    document.body.append(dlg);
+    dlg.addEventListener('click', (e) => {
+      const v = e.target.closest('button')?.value;
+      if (v || e.target === dlg) { dlg.close(); dlg.remove(); resolve(v === 'yes'); }
+    });
+    dlg.showModal();
+  });
+}
+
+function renderAll() {
+  renderKpis();
+  renderRequests();
+  renderClients();
+  renderResources();
+  renderActivity();
+  renderStaff();
+  const n = state.requests.filter((r) => r.status === 'submitted').length;
+  const badge = $('#tab-count-new');
+  badge.textContent = n;
+  badge.hidden = n === 0;
+  document.title = n ? `(${n}) Pink Pack Dashboard` : 'Pink Pack Dashboard';
+  if (state.openRequestId) {
+    if (state.drawerDirty) {
+      const note = $('#req-stale');
+      if (note) note.hidden = false;
+    } else {
+      renderRequestDrawer(state.openRequestId);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------
+// Ride requests
+// ---------------------------------------------------------------------
+
+function renderKpis() {
+  const count = (s) => state.requests.filter((r) => r.status === s).length;
+  const now = new Date();
+  const fulfilledThisMonth = state.requests.filter((r) => {
+    if (r.status !== 'fulfilled' || !r.fulfilled_at) return false;
+    const d = new Date(r.fulfilled_at);
+    return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+  }).length;
+  const sum = (kind) => state.resources.filter((r) => r.kind === kind && r.active).reduce((a, r) => a + Number(r.balance), 0);
+
+  const tiles = [
+    ['New requests', count('submitted'), 'Waiting for review', count('submitted') > 0],
+    ['In review', count('in_review'), 'Decision pending'],
+    ['Approved', count('approved'), 'Booked or to book'],
+    ['Fulfilled this month', fulfilledThisMonth, now.toLocaleString('en-US', { month: 'long' })],
+    ['Vouchers on hand', sum('voucher').toLocaleString('en-US'), 'Across active voucher pools'],
+    ['Funding available', fmtAmount('funding', sum('funding')), 'Across active funding pools'],
+  ];
+  $('#kpis').innerHTML = tiles.map(([label, value, sub, alert]) => `
+    <div class="card kpi ${alert ? 'alert' : ''}">
+      <div class="label">${esc(label)}</div>
+      <div class="value">${esc(value)}</div>
+      <div class="sub">${esc(sub)}</div>
+    </div>`).join('');
+}
+
+function renderRequests() {
+  const filters = [
+    ['open', 'Open', (r) => OPEN.includes(r.status)],
+    ['submitted', 'Submitted', (r) => r.status === 'submitted'],
+    ['in_review', 'In review', (r) => r.status === 'in_review'],
+    ['approved', 'Approved', (r) => r.status === 'approved'],
+    ['fulfilled', 'Fulfilled', (r) => r.status === 'fulfilled'],
+    ['denied', 'Denied', (r) => r.status === 'denied'],
+    ['all', 'All', () => true],
+  ];
+  $('#status-filters').innerHTML = filters.map(([key, label, fn]) =>
+    `<button class="chip" data-filter="${key}" aria-pressed="${state.filter === key}">${esc(label)}<span class="n">${state.requests.filter(fn).length}</span></button>`,
+  ).join('');
+  $$('#status-filters .chip').forEach((b) => b.addEventListener('click', () => { state.filter = b.dataset.filter; renderRequests(); }));
+
+  const pick = filters.find((f) => f[0] === state.filter)[2];
+  let rows = state.requests.filter(pick).filter((r) => {
+    if (!state.search) return true;
+    const c = clientById(r.client_id);
+    return [clientName(c), r.pickup_address, r.dropoff_address, c?.phone, c?.email]
+      .join(' ').toLowerCase().includes(state.search);
+  });
+  const descending = ['fulfilled', 'denied', 'all'].includes(state.filter);
+  rows = rows.sort((a, b) => (new Date(a.pickup_at) - new Date(b.pickup_at)) * (descending ? -1 : 1));
+
+  if (!rows.length) {
+    $('#requests-body').innerHTML = `<tr><td colspan="6" class="empty">${state.requests.length ? 'No requests match this view.' : 'No ride requests yet. Add a client and send them their link to get started.'}</td></tr>`;
+    return;
+  }
+
+  $('#requests-body').innerHTML = rows.map((r) => {
+    const c = clientById(r.client_id);
+    const past = new Date(r.pickup_at) < new Date() && OPEN.includes(r.status);
+    return `
+      <tr class="clickable ${r.status === 'submitted' ? 'is-new' : ''}" data-id="${esc(r.id)}">
+        <td class="nowrap"><strong>${esc(fmtDateTime(r.pickup_at))}</strong>
+          ${r.return_trip ? `<div class="sub">Return ${esc(fmtTime(r.return_at))}</div>` : ''}
+          ${past ? '<div class="sub" style="color:var(--red)">Pickup time has passed</div>' : ''}</td>
+        <td>${esc(clientName(c))}<div class="sub">${esc(r.contact_phone || c?.phone || '')}</div></td>
+        <td><div class="route"><span>${esc(r.pickup_address)}</span><span>${esc(r.dropoff_address)}</span></div></td>
+        <td>${esc(REASONS[r.reason_category] || r.reason_category)}</td>
+        <td><span class="pill ${esc(r.status)}">${esc(STATUSES[r.status])}</span></td>
+        <td class="nowrap muted">${esc(timeAgo(r.created_at))}</td>
+      </tr>`;
+  }).join('');
+  $$('#requests-body tr[data-id]').forEach((tr) => tr.addEventListener('click', () => openRequest(tr.dataset.id)));
+}
+
+function openRequest(id) {
+  state.openRequestId = id;
+  state.drawerDirty = false;
+  renderRequestDrawer(id);
+  const dlg = $('#dlg-request');
+  if (!dlg.open) dlg.showModal();
+}
+
+function renderRequestDrawer(id) {
+  const r = state.requests.find((x) => x.id === id);
+  if (!r) { $('#req-body').innerHTML = '<p class="muted">This request no longer exists.</p>'; return; }
+  const c = clientById(r.client_id);
+  const charge = state.transactions.find((t) => t.ride_request_id === r.id);
+  const activeResources = state.resources.filter((x) => x.active || x.id === charge?.resource_id);
+
+  $('#req-title').textContent = `Ride for ${clientName(c)}`;
+  const editWasOpen = $('#req-body details')?.open;
+
+  const reached = {
+    submitted: 1, in_review: 2, approved: 3, denied: 3, fulfilled: 4,
+  }[r.status];
+  const steps = [
+    ['Submitted', reached >= 1],
+    ['In review', reached >= 2],
+    [r.status === 'denied' ? 'Denied' : 'Approved', reached >= 3],
+    ['Fulfilled', reached >= 4],
+  ];
+
+  let actions = '';
+  if (r.status === 'submitted') {
+    actions = `
+      <div class="panel tinted">
+        <h3>Next step</h3>
+        <p class="small muted">Mark this request as in review so it is clear someone is working on it.</p>
+        <div><button class="btn primary" data-do="in_review">Start review</button></div>
+      </div>`;
+  } else if (r.status === 'in_review') {
+    actions = `
+      <div class="panel tinted">
+        <h3>Decision</h3>
+        <label class="field">Note <span class="hint">Required when denying. Visible to staff only.</span>
+          <textarea id="decision-note" maxlength="500">${esc(r.decision_note || '')}</textarea></label>
+        <p class="form-error" id="decision-error" hidden></p>
+        <div class="toolbar">
+          <button class="btn success" data-do="approved">Approve</button>
+          <button class="btn danger" data-do="denied">Deny</button>
+          <button class="btn ghost" data-do="submitted">Move back to submitted</button>
+        </div>
+      </div>`;
+  } else if (r.status === 'denied') {
+    actions = `
+      <div class="panel tinted">
+        <h3>Denied</h3>
+        <p>${esc(r.decision_note || 'No note recorded.')}</p>
+        <div><button class="btn" data-do="in_review">Reopen for review</button></div>
+      </div>`;
+  }
+
+  let booking = '';
+  if (r.status === 'approved' || r.status === 'fulfilled') {
+    const selectedRes = charge ? charge.resource_id : '';
+    booking = `
+      <div class="panel">
+        <h3>Booking</h3>
+        ${r.decision_note ? `<p class="small muted">Approval note: ${esc(r.decision_note)}</p>` : ''}
+        <div class="form-grid two">
+          <label class="field">Ride provider
+            <input id="bk-provider" list="providers" value="${esc(r.ride_provider || '')}" placeholder="e.g. Uber Health" /></label>
+          <label class="field">Confirmation #
+            <input id="bk-confirmation" value="${esc(r.confirmation_code || '')}" /></label>
+        </div>
+        <datalist id="providers"><option>Uber Health</option><option>Uber</option><option>Lyft</option><option>Taxi</option><option>Volunteer driver</option></datalist>
+        <div class="form-grid two">
+          <label class="field">Paid with
+            <select id="bk-resource">
+              <option value="">Nothing charged</option>
+              ${activeResources.map((x) => `<option value="${esc(x.id)}" ${x.id === selectedRes ? 'selected' : ''}>${esc(x.name)} (${esc(fmtAmount(x.kind, x.balance))} left)</option>`).join('')}
+            </select></label>
+          <label class="field"><span id="bk-amount-label">Amount used</span>
+            <input id="bk-amount" type="number" min="0" step="0.01" value="${charge ? esc(Math.abs(charge.amount)) : ''}" /></label>
+        </div>
+        <p class="notice" id="bk-warning" hidden></p>
+        <p class="form-error" id="bk-error" hidden></p>
+        <div class="toolbar">
+          <button class="btn primary" id="bk-save">${r.booked_at ? 'Update booking' : 'Save booking'}</button>
+          ${r.booked_at ? `<span class="small muted">Booked ${esc(fmtDateTime(r.booked_at))}</span>` : ''}
+        </div>
+      </div>
+      <div class="panel tinted">
+        ${r.status === 'approved'
+          ? `<h3>Ride completed?</h3>
+             <div class="toolbar"><button class="btn success" data-do="fulfilled">Mark fulfilled</button>
+             <button class="btn ghost" data-do="in_review">Move back to review</button></div>`
+          : `<h3>Fulfilled ${esc(fmtDateTime(r.fulfilled_at))}</h3>
+             <div><button class="btn ghost" data-do="approved">Move back to approved</button></div>`}
+      </div>`;
+  }
+
+  $('#req-body').innerHTML = `
+    <p class="notice info" id="req-stale" hidden>Someone else just changed this request. Close and reopen it to see the latest version before saving.</p>
+    <div class="steps">${steps.map(([label, done]) => `<span class="${done ? (label === 'Denied' ? 'bad' : 'done') : ''}">${esc(label)}</span>`).join('')}</div>
+    <dl class="detail-list">
+      <dt>Client</dt><dd>${esc(clientName(c))}${c?.in_treatment ? ' <span class="pill neutral">In treatment</span>' : ''}</dd>
+      <dt>Phone</dt><dd>${esc(r.contact_phone || c?.phone || 'Not provided')}${r.contact_phone && c?.phone && r.contact_phone !== c.phone ? `<div class="small muted">On file: ${esc(c.phone)}</div>` : ''}</dd>
+      <dt>Email</dt><dd>${c?.email ? `<a href="mailto:${esc(c.email)}">${esc(c.email)}</a>` : 'Not provided'}</dd>
+      <dt>Pickup</dt><dd><strong>${esc(fmtDateTime(r.pickup_at))}</strong></dd>
+      <dt>Return trip</dt><dd>${r.return_trip ? esc(fmtDateTime(r.return_at)) : 'No'}</dd>
+      <dt>From</dt><dd>${esc(r.pickup_address)}</dd>
+      <dt>To</dt><dd>${esc(r.dropoff_address)}</dd>
+      <dt>Reason</dt><dd>${esc(REASONS[r.reason_category] || r.reason_category)}${r.reason_details ? `<div class="small muted">${esc(r.reason_details)}</div>` : ''}</dd>
+      <dt>Received</dt><dd>${esc(fmtDateTime(r.created_at))}</dd>
+    </dl>
+    ${actions}
+    ${booking}
+    <details class="panel">
+      <summary><strong>Edit ride details</strong></summary>
+      <div class="form-grid" style="margin-top:12px">
+        <label class="field">Pickup time<input id="ed-pickup" type="datetime-local" value="${esc(toLocalInput(r.pickup_at))}" /></label>
+        <label class="check"><input id="ed-return-trip" type="checkbox" ${r.return_trip ? 'checked' : ''} /> Return trip</label>
+        <label class="field">Return time<input id="ed-return" type="datetime-local" value="${esc(toLocalInput(r.return_at))}" /></label>
+        <label class="field">From<input id="ed-from" value="${esc(r.pickup_address)}" maxlength="300" /></label>
+        <label class="field">To<input id="ed-to" value="${esc(r.dropoff_address)}" maxlength="300" /></label>
+        <label class="field">Contact phone<input id="ed-phone" value="${esc(r.contact_phone || '')}" maxlength="30" /></label>
+        <p class="form-error" id="ed-error" hidden></p>
+        <div><button class="btn" id="ed-save">Save changes</button></div>
+      </div>
+    </details>`;
+
+  const body = $('#req-body');
+  if (editWasOpen) $('details', body).open = true;
+  $$('[data-do]', body).forEach((b) => b.addEventListener('click', () => withBusy(b, () => changeStatus(r, b.dataset.do))));
+  $('#ed-save', body).addEventListener('click', (e) => withBusy(e.target, () => saveRideEdits(r)));
+  if (booking) {
+    const syncBooking = () => {
+      const res = resourceById($('#bk-resource').value);
+      $('#bk-amount-label').textContent = res ? (res.kind === 'funding' ? 'Amount spent ($)' : 'Vouchers used') : 'Amount used';
+      $('#bk-amount').step = res?.kind === 'voucher' ? '1' : '0.01';
+      const amt = Number($('#bk-amount').value || 0);
+      const already = charge && res && charge.resource_id === res.id ? Math.abs(charge.amount) : 0;
+      const warn = res && amt > Number(res.balance) + already;
+      $('#bk-warning').hidden = !warn;
+      if (warn) $('#bk-warning').textContent = `${res.name} only has ${fmtAmount(res.kind, Number(res.balance) + already)} available. You can still save, but the balance will go negative.`;
+    };
+    $('#bk-resource').addEventListener('change', syncBooking);
+    $('#bk-amount').addEventListener('input', syncBooking);
+    syncBooking();
+    $('#bk-save').addEventListener('click', (e) => withBusy(e.target, () => saveBooking(r)));
+  }
+}
+
+async function changeStatus(r, status) {
+  const patch = { status };
+  if (r.status === 'in_review' && (status === 'approved' || status === 'denied')) {
+    const note = $('#decision-note')?.value.trim() || '';
+    if (status === 'denied' && !note) {
+      $('#decision-error').textContent = 'Add a short note explaining the denial.';
+      $('#decision-error').hidden = false;
+      return;
+    }
+    patch.decision_note = note || null;
+  }
+  if (status === 'fulfilled') patch.fulfilled_at = new Date().toISOString();
+  if (r.status === 'fulfilled' && status !== 'fulfilled') patch.fulfilled_at = null;
+
+  if (status === 'fulfilled' && !r.booked_at) {
+    const ok = await confirmDialog('No booking has been saved for this ride. Mark it fulfilled anyway?', 'Mark fulfilled');
+    if (!ok) return;
+  }
+
+  const { error } = await supabase.from('ride_requests').update(patch).eq('id', r.id);
+  if (error) return toast(errMsg(error), 'error');
+  state.drawerDirty = false;
+  toast(`Request marked ${STATUSES[status].toLowerCase()}.`);
+  await loadAll();
+}
+
+async function saveBooking(r) {
+  const resourceId = $('#bk-resource').value || null;
+  const amount = Number($('#bk-amount').value || 0);
+  const err = $('#bk-error');
+  if (resourceId && !(amount > 0)) {
+    err.textContent = 'Enter how much was used, or choose "Nothing charged".';
+    err.hidden = false;
+    return;
+  }
+  const res = resourceById(resourceId);
+  if (res?.kind === 'voucher' && !Number.isInteger(amount)) {
+    err.textContent = 'Vouchers are counted in whole numbers.';
+    err.hidden = false;
+    return;
+  }
+  const { error } = await supabase.rpc('book_ride', {
+    p_request_id: r.id,
+    p_provider: $('#bk-provider').value,
+    p_confirmation: $('#bk-confirmation').value,
+    p_resource_id: resourceId,
+    p_amount_used: resourceId ? amount : null,
+  });
+  if (error) { err.textContent = errMsg(error); err.hidden = false; return; }
+  state.drawerDirty = false;
+  toast('Booking saved.');
+  await loadAll();
+}
+
+async function saveRideEdits(r) {
+  const err = $('#ed-error');
+  const pickup = fromLocalInput($('#ed-pickup').value);
+  const returnTrip = $('#ed-return-trip').checked;
+  const ret = returnTrip ? fromLocalInput($('#ed-return').value) : null;
+  const from = $('#ed-from').value.trim();
+  const to = $('#ed-to').value.trim();
+  let msg = '';
+  if (!pickup) msg = 'Pickup time is required.';
+  else if (!from || !to) msg = 'Both addresses are required.';
+  else if (returnTrip && (!ret || new Date(ret) <= new Date(pickup))) msg = 'Return time must be after pickup.';
+  if (msg) { err.textContent = msg; err.hidden = false; return; }
+
+  const { error } = await supabase.from('ride_requests').update({
+    pickup_at: pickup, return_trip: returnTrip, return_at: ret,
+    pickup_address: from, dropoff_address: to, contact_phone: $('#ed-phone').value.trim() || null,
+  }).eq('id', r.id);
+  if (error) { err.textContent = errMsg(error); err.hidden = false; return; }
+  state.drawerDirty = false;
+  toast('Ride details updated.');
+  await loadAll();
+}
+
+// ---------------------------------------------------------------------
+// Clients
+// ---------------------------------------------------------------------
+
+function requestLink(c) {
+  const base = new URL('request.html', location.origin + location.pathname);
+  base.searchParams.set('t', c.request_token);
+  return base.toString();
+}
+
+function renderClients() {
+  const rows = state.clients.filter((c) => !state.clientSearch
+    || [clientName(c), c.email, c.phone].join(' ').toLowerCase().includes(state.clientSearch));
+
+  if (!rows.length) {
+    $('#clients-body').innerHTML = `<tr><td colspan="6" class="empty">${state.clients.length ? 'No clients match.' : 'No clients yet. Click "Add client" to create the first one.'}</td></tr>`;
+    return;
+  }
+  $('#clients-body').innerHTML = rows.map((c) => {
+    const rides = state.requests.filter((r) => r.client_id === c.id);
+    const done = rides.filter((r) => r.status === 'fulfilled').length;
+    return `
+      <tr data-id="${esc(c.id)}">
+        <td><strong>${esc(clientName(c))}</strong><div class="sub">Added ${esc(fmtDate(c.created_at))}</div></td>
+        <td>${esc(c.email || '')}<div class="sub">${esc(c.phone || '')}</div></td>
+        <td>${c.in_treatment ? '<span class="pill neutral">In treatment</span>' : '<span class="muted small">Not in treatment</span>'}</td>
+        <td class="num">${rides.length}<div class="sub">${done} fulfilled</div></td>
+        <td>${c.request_link_active ? '<span class="pill fulfilled">Active</span>' : '<span class="pill denied">Off</span>'}</td>
+        <td class="nowrap" style="text-align:right">
+          <button class="btn sm" data-client-link>Link</button>
+          <button class="btn sm ghost" data-client-edit>Edit</button>
+        </td>
+      </tr>`;
+  }).join('');
+  $$('#clients-body tr[data-id]').forEach((tr) => {
+    const c = clientById(tr.dataset.id);
+    $('[data-client-link]', tr)?.addEventListener('click', () => openLinkDialog(c.id));
+    $('[data-client-edit]', tr)?.addEventListener('click', () => openClientForm(c));
+  });
+}
+
+let editingClientId = null;
+function openClientForm(c = null) {
+  const form = $('#form-client');
+  form.reset();
+  formError(form, '');
+  editingClientId = c?.id || null;
+  $('#client-form-title').textContent = c ? 'Edit client' : 'Add client';
+  if (c) {
+    form.first_name.value = c.first_name;
+    form.last_name.value = c.last_name || '';
+    form.email.value = c.email || '';
+    form.phone.value = c.phone || '';
+    form.in_treatment.checked = c.in_treatment;
+  }
+  $('#dlg-client').showModal();
+}
+
+async function saveClient(e) {
+  e.preventDefault();
+  const form = e.target;
+  const btn = $('button[type="submit"]', form);
+  await withBusy(btn, async () => {
+    const row = {
+      first_name: form.first_name.value.trim(),
+      last_name: form.last_name.value.trim(),
+      email: form.email.value.trim().toLowerCase() || null,
+      phone: form.phone.value.trim() || null,
+      in_treatment: form.in_treatment.checked,
+    };
+    if (!row.first_name) return formError(form, 'First name is required.');
+    const q = editingClientId
+      ? supabase.from('clients').update(row).eq('id', editingClientId).select().single()
+      : supabase.from('clients').insert(row).select().single();
+    const { data, error } = await q;
+    if (error) return formError(form, errMsg(error));
+    $('#dlg-client').close();
+    await loadAll();
+    if (!editingClientId) openLinkDialog(data.id, true);
+    else toast('Client updated.');
+  });
+}
+
+function openLinkDialog(clientId, justCreated = false) {
+  const c = clientById(clientId);
+  if (!c) return;
+  const url = requestLink(c);
+  const subject = `Your ${ORG_NAME} ride request link`;
+  const bodyText = `Hi ${c.first_name},\n\nHere is your personal link to request a ride from ${ORG_NAME}:\n${url}\n\nUse it any time you need a ride to treatment or another appointment. Please keep this link to yourself. We will contact you to confirm each ride.\n\nQuestions? Call us at ${ORG_PHONE}.\n\n${ORG_NAME}`;
+  const mailto = `mailto:${encodeURIComponent(c.email || '')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(bodyText)}`;
+
+  $('#link-body').innerHTML = `
+    ${justCreated ? `<p class="notice info">${esc(clientName(c))} was added. Send them this link so they can request rides.</p>` : ''}
+    <p><strong>${esc(clientName(c))}</strong> ${c.request_link_active ? '<span class="pill fulfilled">Active</span>' : '<span class="pill denied">Off</span>'}</p>
+    ${c.request_link_active ? `
+      <div class="link-box"><input readonly value="${esc(url)}" id="link-url" /><button class="btn" id="link-copy">Copy</button></div>
+      <div class="toolbar">
+        <a class="btn primary" href="${esc(mailto)}">${c.email ? 'Email link' : 'Open email with link'}</a>
+      </div>` : '<p class="muted">This link is turned off. The client cannot submit requests until you turn it back on.</p>'}
+    <div class="panel tinted">
+      <h3>Link controls</h3>
+      <p class="small muted">Turn the link off to stop new requests. Make a new link if the old one was shared with the wrong person. The old link stops working immediately.</p>
+      <div class="toolbar">
+        <button class="btn" id="link-toggle">${c.request_link_active ? 'Turn link off' : 'Turn link on'}</button>
+        <button class="btn danger" id="link-rotate">Make a new link</button>
+      </div>
+    </div>`;
+
+  $('#link-copy')?.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(url); toast('Link copied.'); } catch { $('#link-url').select(); }
+  });
+  $('#link-toggle').addEventListener('click', (e) => withBusy(e.target, async () => {
+    const { error } = await supabase.from('clients').update({ request_link_active: !c.request_link_active }).eq('id', c.id);
+    if (error) return toast(errMsg(error), 'error');
+    await loadAll();
+    openLinkDialog(c.id);
+  }));
+  $('#link-rotate').addEventListener('click', (e) => withBusy(e.target, async () => {
+    const ok = await confirmDialog(`Make a new link for ${clientName(c)}? The current link will stop working.`, 'Make new link', true);
+    if (!ok) return;
+    const token = crypto.randomUUID().replaceAll('-', '');
+    const { error } = await supabase.from('clients').update({ request_token: token, request_link_active: true }).eq('id', c.id);
+    if (error) return toast(errMsg(error), 'error');
+    await loadAll();
+    openLinkDialog(c.id);
+    toast('New link created. Send it to the client.');
+  }));
+
+  const dlg = $('#dlg-link');
+  if (!dlg.open) dlg.showModal();
+}
+
+// ---------------------------------------------------------------------
+// Resources
+// ---------------------------------------------------------------------
+
+function renderResources() {
+  const list = [...state.resources].sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name));
+  $('#resource-cards').innerHTML = list.length ? list.map((r) => `
+    <div class="card resource" data-id="${esc(r.id)}" style="${r.active ? '' : 'opacity:.6'}">
+      <div class="top">
+        <div><h3>${esc(r.name)}</h3><div class="small muted">${r.kind === 'funding' ? 'Funding' : 'Vouchers'}${r.active ? '' : ' · Archived'}</div></div>
+        <button class="btn sm ghost" data-res-toggle>${r.active ? 'Archive' : 'Restore'}</button>
+      </div>
+      <div class="balance ${Number(r.balance) <= 0 ? 'low' : ''}">${esc(fmtAmount(r.kind, r.balance))}</div>
+      <div class="small muted">Used to date: ${esc(fmtAmount(r.kind, Math.abs(r.total_used)))}</div>
+      ${r.notes ? `<div class="small">${esc(r.notes)}</div>` : ''}
+      <div class="toolbar">
+        <button class="btn sm" data-res-add>Add</button>
+        <button class="btn sm" data-res-use>Use</button>
+      </div>
+    </div>`).join('') : '<div class="card empty">No resources yet. Add a funding pool or voucher stock.</div>';
+
+  $$('#resource-cards [data-id]').forEach((card) => {
+    const r = resourceById(card.dataset.id);
+    $('[data-res-add]', card).addEventListener('click', () => openTransactionForm(r.id, 'add'));
+    $('[data-res-use]', card).addEventListener('click', () => openTransactionForm(r.id, 'use'));
+    $('[data-res-toggle]', card).addEventListener('click', (e) => withBusy(e.target, async () => {
+      const { error } = await supabase.from('resources').update({ active: !r.active }).eq('id', r.id);
+      if (error) return toast(errMsg(error), 'error');
+      await loadAll();
+    }));
+  });
+
+  $('#ledger-body').innerHTML = state.transactions.length ? state.transactions.map((t) => {
+    const r = resourceById(t.resource_id);
+    return `
+      <tr>
+        <td class="nowrap">${esc(fmtDate(t.occurred_on))}</td>
+        <td>${esc(r?.name || '')}</td>
+        <td class="nowrap num ${t.amount < 0 ? 'amount-neg' : 'amount-pos'}">${t.amount > 0 ? '+' : ''}${esc(fmtAmount(r?.kind, t.amount))}</td>
+        <td>${esc(t.description)}${t.ride_request_id ? ` <button class="btn sm ghost" data-open-ride="${esc(t.ride_request_id)}">View ride</button>` : ''}</td>
+        <td class="small muted">${esc(t.created_by || '')}</td>
+      </tr>`;
+  }).join('') : '<tr><td colspan="5" class="empty">No history yet.</td></tr>';
+  $$('#ledger-body [data-open-ride]').forEach((b) => b.addEventListener('click', () => openRequest(b.dataset.openRide)));
+}
+
+function openResourceForm() {
+  const form = $('#form-resource');
+  form.reset();
+  formError(form, '');
+  $('#dlg-resource').showModal();
+}
+
+async function saveResource(e) {
+  e.preventDefault();
+  const form = e.target;
+  await withBusy($('button[type="submit"]', form), async () => {
+    const { error } = await supabase.from('resources').insert({
+      name: form.elements.name.value.trim(), kind: form.elements.kind.value, notes: form.elements.notes.value.trim() || null,
+    });
+    if (error) return formError(form, error.code === '23505' ? 'A resource with that name already exists.' : errMsg(error));
+    $('#dlg-resource').close();
+    toast('Resource added. Record its starting balance with "Add".');
+    await loadAll();
+  });
+}
+
+function syncTxLabel() {
+  const form = $('#form-transaction');
+  const r = resourceById(form.resource_id.value);
+  $('#tx-amount-label').textContent = r?.kind === 'voucher' ? 'Number of vouchers' : 'Amount ($)';
+  form.amount.step = r?.kind === 'voucher' ? '1' : '0.01';
+  form.amount.min = r?.kind === 'voucher' ? '1' : '0.01';
+}
+
+function openTransactionForm(resourceId = null, direction = 'add') {
+  const form = $('#form-transaction');
+  form.reset();
+  formError(form, '');
+  const active = state.resources.filter((r) => r.active);
+  if (!active.length) return toast('Add a resource first.', 'error');
+  form.resource_id.innerHTML = active.map((r) => `<option value="${esc(r.id)}">${esc(r.name)}</option>`).join('');
+  if (resourceId) form.resource_id.value = resourceId;
+  form.direction.value = direction;
+  const today = new Date();
+  form.occurred_on.value = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  syncTxLabel();
+  $('#dlg-transaction').showModal();
+}
+
+async function saveTransaction(e) {
+  e.preventDefault();
+  const form = e.target;
+  await withBusy($('button[type="submit"]', form), async () => {
+    const r = resourceById(form.resource_id.value);
+    const amount = Number(form.amount.value);
+    if (!(amount > 0)) return formError(form, 'Enter an amount greater than zero.');
+    if (r?.kind === 'voucher' && !Number.isInteger(amount)) return formError(form, 'Vouchers are counted in whole numbers.');
+    const { error } = await supabase.from('resource_transactions').insert({
+      resource_id: form.resource_id.value,
+      amount: form.direction.value === 'use' ? -amount : amount,
+      description: form.description.value.trim(),
+      occurred_on: form.occurred_on.value,
+    });
+    if (error) return formError(form, errMsg(error));
+    $('#dlg-transaction').close();
+    toast('Saved.');
+    await loadAll();
+  });
+}
+
+// ---------------------------------------------------------------------
+// Activity log
+// ---------------------------------------------------------------------
+
+const TABLE_LABELS = {
+  staff: 'staff access', clients: 'client', resources: 'resource',
+  ride_requests: 'ride request', resource_transactions: 'resource history',
+};
+const FIELD_LABELS = {
+  status: 'status', pickup_at: 'pickup', return_at: 'return time', return_trip: 'return trip',
+  pickup_address: 'from', dropoff_address: 'to', decision_note: 'note', ride_provider: 'provider',
+  confirmation_code: 'confirmation #', booked_at: 'booked', fulfilled_at: 'fulfilled', contact_phone: 'phone',
+  first_name: 'first name', last_name: 'last name', email: 'email', phone: 'phone', in_treatment: 'in treatment',
+  request_link_active: 'request link on', role: 'role', full_name: 'name', name: 'name', active: 'active',
+  notes: 'notes', amount: 'amount', description: 'description', reason_category: 'reason', reason_details: 'reason details',
+};
+const HIDDEN_FIELDS = new Set(['updated_at', 'created_at', 'id', 'request_token', 'client_id', 'created_by', 'resource_id', 'ride_request_id']);
+
+function fmtValue(key, v) {
+  if (v === null || v === undefined || v === '') return '(blank)';
+  if (typeof v === 'boolean') return v ? 'yes' : 'no';
+  if (key === 'status') return STATUSES[v] || v;
+  if (key === 'reason_category') return REASONS[v] || v;
+  if (/_at$/.test(key)) return fmtDateTime(v);
+  return String(v).length > 60 ? `${String(v).slice(0, 60)}…` : String(v);
+}
+
+function subjectOf(row) {
+  const d = row.new_data || row.old_data || {};
+  switch (row.table_name) {
+    case 'clients': return `${d.first_name || ''} ${d.last_name || ''}`.trim();
+    case 'ride_requests': {
+      const c = clientById(d.client_id);
+      return `${c ? clientName(c) : 'client'}, pickup ${fmtDateTime(d.pickup_at)}`;
+    }
+    case 'resources': return d.name;
+    case 'resource_transactions': {
+      const r = resourceById(d.resource_id);
+      return `${r?.name || 'resource'} ${Number(d.amount) > 0 ? '+' : ''}${fmtAmount(r?.kind, d.amount)} (${d.description})`;
+    }
+    case 'staff': return d.email;
+    default: return '';
+  }
+}
+
+function renderActivity() {
+  if (!state.audit.length) {
+    $('#activity-list').innerHTML = '<li class="empty" style="display:block">No activity yet.</li>';
+    return;
+  }
+  $('#activity-list').innerHTML = state.audit.map((row) => {
+    const verb = { insert: 'added', update: 'updated', delete: 'removed' }[row.action];
+    let changes = '';
+    if (row.action === 'update' && row.old_data && row.new_data) {
+      const keys = Object.keys(row.new_data).filter((k) =>
+        JSON.stringify(row.new_data[k]) !== JSON.stringify(row.old_data[k]));
+      const parts = [];
+      if (keys.includes('request_token')) parts.push('made a new request link');
+      for (const k of keys.filter((x) => !HIDDEN_FIELDS.has(x)).slice(0, 5)) {
+        parts.push(`${FIELD_LABELS[k] || k}: ${fmtValue(k, row.old_data[k])} → ${fmtValue(k, row.new_data[k])}`);
+      }
+      changes = parts.join(' · ');
+    }
+    return `
+      <li>
+        <div class="when">${esc(fmtDateTime(row.changed_at))}</div>
+        <div>
+          <span class="who">${esc(row.changed_by)}</span> ${esc(verb)} ${esc(TABLE_LABELS[row.table_name] || row.table_name)}
+          <strong>${esc(subjectOf(row))}</strong>
+          ${changes ? `<div class="changes">${esc(changes)}</div>` : ''}
+        </div>
+      </li>`;
+  }).join('');
+}
+
+// ---------------------------------------------------------------------
+// Staff access (admins only)
+// ---------------------------------------------------------------------
+
+function renderStaff() {
+  if (!state.isAdmin) return;
+  const me = state.me.email;
+  $('#staff-body').innerHTML = state.staff.map((s) => `
+    <tr data-email="${esc(s.email)}">
+      <td>${esc(s.full_name || '')}${s.email === me ? ' <span class="pill neutral">You</span>' : ''}</td>
+      <td>${esc(s.email)}</td>
+      <td>
+        <select data-role ${s.email === me ? 'disabled' : ''} style="width:auto">
+          <option value="staff" ${s.role === 'staff' ? 'selected' : ''}>Staff</option>
+          <option value="admin" ${s.role === 'admin' ? 'selected' : ''}>Admin</option>
+        </select>
+      </td>
+      <td class="muted small">${esc(fmtDate(s.created_at))}</td>
+      <td style="text-align:right">${s.email === me ? '' : '<button class="btn sm danger" data-remove>Remove</button>'}</td>
+    </tr>`).join('');
+
+  $$('#staff-body tr').forEach((tr) => {
+    const email = tr.dataset.email;
+    $('[data-role]', tr).addEventListener('change', async (e) => {
+      const { error } = await supabase.from('staff').update({ role: e.target.value }).eq('email', email);
+      if (error) toast(errMsg(error), 'error'); else toast('Role updated.');
+      await loadAll();
+    });
+    $('[data-remove]', tr)?.addEventListener('click', async (e) => {
+      const ok = await confirmDialog(`Remove ${email}? They will lose access immediately.`, 'Remove', true);
+      if (!ok) return;
+      await withBusy(e.target, async () => {
+        const { error } = await supabase.from('staff').delete().eq('email', email);
+        if (error) return toast(errMsg(error), 'error');
+        toast('Access removed.');
+        await loadAll();
+      });
+    });
+  });
+}
+
+function openStaffForm() {
+  const form = $('#form-staff');
+  form.reset();
+  formError(form, '');
+  $('#dlg-staff').showModal();
+}
+
+async function saveStaff(e) {
+  e.preventDefault();
+  const form = e.target;
+  await withBusy($('button[type="submit"]', form), async () => {
+    const { error } = await supabase.from('staff').insert({
+      email: form.email.value.trim().toLowerCase(), full_name: form.full_name.value.trim() || null, role: form.role.value,
+    });
+    if (error) return formError(form, error.code === '23505' ? 'That email already has access.' : errMsg(error));
+    $('#dlg-staff').close();
+    toast('Access granted. They can now sign in with Google.');
+    await loadAll();
+  });
+}
+
+boot();

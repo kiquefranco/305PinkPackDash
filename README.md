@@ -1,1 +1,160 @@
-# 305PinkPackDash
+# 305 Pink Pack Dashboard
+
+Internal dashboard for 305 Pink Pack. Staff schedule rides for the people Pink Pack serves and track funding and ride vouchers. Clients request rides through a private link that only Pink Pack sends.
+
+Built by the Hyperion Council team, Fall 2026.
+
+## What it does
+
+| Area | What it does |
+|---|---|
+| **Ride requests** | New requests appear on the dashboard live. Each one moves through Submitted, In review, Approved or Denied, and Fulfilled. |
+| **Booking** | When a ride is approved, staff record the provider, the confirmation number, and what it cost. The cost comes out of a funding pool or the voucher stock automatically. |
+| **Clients** | Staff add a client and send them a personal request link. Only people with a link can submit. Links can be turned off or replaced at any time. |
+| **Resources** | Balances for funding and ride vouchers, with a full history of every addition and use. |
+| **Activity log** | Every change, who made it, and when. |
+| **Staff access** | Admins decide which Google accounts can sign in. |
+
+## What it costs
+
+$0 per month. The stack:
+
+- **GitHub Pages** hosts the website. It is free for public repositories.
+- **Supabase** (free plan) provides the database, the Google sign-in, and the live updates.
+- **Google Cloud** provides the Google sign-in credentials. They are free.
+
+The free Supabase plan includes a 500 MB database and 50,000 monthly active users. This dashboard will use a small fraction of both. Supabase pauses free projects after 7 days without activity. The included GitHub Action pings the database every 3 days, so the project never pauses.
+
+## Security model
+
+- Staff sign in with Google. Signing in alone gives no access. The Google email must also be on the staff list in the database.
+- The request form cannot read any data. It can only call two database functions: one checks that a link is valid, and the other submits a request for that link's client.
+- Every table is protected by row level security in the database, not by the website code. The Supabase key in `config.js` is designed to be public and is safe in a public repository.
+- **Never** put the Supabase `service_role` or secret key in this repository.
+- No diagnosis or medical detail is stored. The only health field is "In treatment". The form asks clients not to include medical details.
+
+## Files
+
+```
+index.html                     Staff dashboard
+request.html                   Client ride request form (opened from a private link)
+assets/css/styles.css          Styles for both pages
+assets/js/config.js            Supabase URL and key, org name and phone  <- edit this
+assets/js/shared.js            Supabase connection and shared helpers
+assets/js/dashboard.js         Dashboard logic
+assets/js/request.js           Request form logic
+supabase/schema.sql            Database tables, security rules, functions
+supabase/seed.sql              First staff accounts and starting resources  <- edit this
+.github/workflows/keepalive.yml  Keeps the free Supabase project awake
+```
+
+There is no build step. The files in the repo are the website.
+
+---
+
+## Setup (about 45 minutes, one time)
+
+Use an account that belongs to 305 Pink Pack for Supabase and Google Cloud where possible, so the organization keeps ownership after the semester.
+
+### 1. Create the Supabase project
+
+1. Go to [supabase.com](https://supabase.com) and create a free account.
+2. Click **New project**. Name it `pink-pack-dashboard`, choose the **East US** region, and save the database password somewhere safe.
+3. Wait for the project to finish setting up.
+
+### 2. Create the database
+
+1. Open `supabase/seed.sql` and replace `rosemary@replace-me.org` with the Google account Rosemary will sign in with. Change the admin email if needed.
+2. In Supabase, open **SQL Editor**, click **New query**, paste the full contents of `supabase/schema.sql`, and click **Run**.
+3. Open another new query, paste the contents of `supabase/seed.sql`, and click **Run**.
+
+### 3. Connect the website to Supabase
+
+1. In Supabase, go to **Project Settings > API Keys** (or **API** on older projects).
+2. Copy the **Project URL** and the **publishable** key (starts with `sb_publishable_`). Older projects show an **anon public** key instead. Either works.
+3. Paste both into `assets/js/config.js`.
+4. Commit and push.
+
+### 4. Turn on GitHub Pages
+
+1. In the GitHub repo, go to **Settings > Pages**.
+2. Under **Build and deployment**, choose **Deploy from a branch**, branch `main`, folder `/ (root)`, and save.
+3. After a minute, the site is live at `https://<github-username>.github.io/<repo-name>/`. This is the **dashboard URL**.
+
+GitHub Pages is free only for public repositories. A private repository with Pages needs GitHub Team. Verified nonprofits get that free through GitHub for Nonprofits.
+
+### 5. Set up Google sign-in
+
+**In Google Cloud:**
+
+1. Go to [console.cloud.google.com](https://console.cloud.google.com) and create a project named `Pink Pack Dashboard`.
+2. Open **APIs & Services > OAuth consent screen** (also called **Google Auth Platform**). Choose **External**. Enter the app name `305 Pink Pack Dashboard` and a support email. Only the default scopes (email, profile, openid) are needed.
+3. Set the publishing status to **In production**. Apps that only use the default scopes do not need Google verification.
+4. Open **Credentials > Create credentials > OAuth client ID** and choose **Web application**.
+   - **Authorized JavaScript origins:** `https://<github-username>.github.io`
+   - **Authorized redirect URIs:** `https://<project-ref>.supabase.co/auth/v1/callback` (Supabase shows this exact URL on its Google provider page)
+5. Copy the **Client ID** and **Client secret**.
+
+**In Supabase:**
+
+1. Go to **Authentication > Sign In / Providers > Google**, turn it on, paste the Client ID and secret, and save.
+2. Go to **Authentication > URL Configuration**.
+   - **Site URL:** the dashboard URL from step 4
+   - **Redirect URLs:** add the dashboard URL. Add `http://localhost:8000/` as well if you test locally.
+
+### 6. Turn on the keep-alive job
+
+1. In the GitHub repo, go to **Settings > Secrets and variables > Actions > New repository secret**.
+2. Add `SUPABASE_URL` with the Project URL.
+3. Add `SUPABASE_KEY` with the publishable (or anon) key.
+4. Go to the **Actions** tab, open **Keep Supabase awake**, and click **Run workflow** once to confirm it passes.
+
+### 7. Test the full flow
+
+1. Open the dashboard URL and sign in with the admin Google account.
+2. Go to **Clients**, add a test client, and copy their link.
+3. Open the link in a private window and submit a request.
+4. The request should appear on the dashboard within a second or two, without refreshing.
+5. Move it through review, approve it, save a booking against a resource, and mark it fulfilled. Check that the resource balance and the activity log update.
+6. Sign in with a Google account that is not on the staff list and confirm you see **No access yet**.
+
+---
+
+## Day-to-day use
+
+**New client:** Clients > Add client > send the link from the dialog. **Email link** opens a pre-written email.
+
+**New request:** It shows up under Ride requests with a pink marker, and the tab shows a count. Open it and click **Start review**.
+
+**Decide:** Approve, or deny with a short note. Notes are visible only to staff.
+
+**Book:** On an approved request, enter the provider and confirmation number. Choose which resource paid for the ride and how much, then save. The balance updates immediately.
+
+**Complete:** After the ride happens, click **Mark fulfilled**.
+
+**Add funds or vouchers:** Resources > **Add** on the resource card. Record the source in the description (for example, "Grant from Miami Foundation").
+
+**Link shared with the wrong person:** Clients > Link > **Make a new link**. The old link stops working immediately.
+
+**Give someone access:** Staff access > Add person (admins only). Use the exact Google account they sign in with.
+
+When two people edit the same request at the same time, the last save wins. Every change is recorded in the activity log, so nothing is lost without a trace.
+
+## Test locally
+
+```
+python3 -m http.server 8000
+```
+
+Then open `http://localhost:8000/`. Google sign-in works locally once `http://localhost:8000/` is in the Supabase redirect URLs.
+
+## Changing the database later
+
+Edit `supabase/schema.sql` and re-run it in the SQL Editor. It is safe to re-run: existing tables and data are kept, and functions, policies and triggers are replaced. Adding a column to an existing table needs an `alter table ... add column if not exists ...` statement.
+
+## Limits to know
+
+- The dashboard is designed for a desktop browser. The request form works on phones.
+- Requests show in Eastern time.
+- A client can have at most 5 requests waiting for review at once. This blocks spam if a link leaks.
+- Pickup times must be in the future and within the next 6 months.

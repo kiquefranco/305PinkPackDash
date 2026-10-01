@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>Pink Pack Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="assets/css/styles.css" />
+</head>
+<body>
+  <!-- Loading -->
+  <div id="screen-loading" class="center-screen"><p class="muted">Loading…</p></div>
+
+  <!-- Not configured -->
+  <div id="screen-setup" class="center-screen" hidden>
+    <div class="card center-card">
+      <div class="brand-mark">305</div>
+      <h1>Almost there</h1>
+      <p class="muted">Add your Supabase project URL and key to <code>assets/js/config.js</code>, then reload. The README walks through it.</p>
+    </div>
+  </div>
+
+  <!-- Sign in -->
+  <div id="screen-login" class="center-screen" hidden>
+    <div class="card center-card">
+      <div class="brand-mark">305</div>
+      <div>
+        <h1>Pink Pack Dashboard</h1>
+        <p class="muted" style="margin-top:6px">Staff sign-in</p>
+      </div>
+      <button id="btn-google" class="btn lg google-btn">
+        <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.5l6.7-6.7C35.6 2.4 30.2 0 24 0 14.6 0 6.6 5.4 2.7 13.3l7.8 6.1C12.4 13.7 17.7 9.5 24 9.5z"/><path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.4c-.5 2.9-2.2 5.3-4.6 6.9l7.5 5.8c4.4-4 6.8-10 6.8-17.2z"/><path fill="#FBBC05" d="M10.5 28.6A14.5 14.5 0 0 1 9.5 24c0-1.6.3-3.2.8-4.6l-7.8-6.1A24 24 0 0 0 0 24c0 3.9.9 7.5 2.6 10.7l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.5-5.8c-2.1 1.4-4.8 2.3-8.4 2.3-6.3 0-11.6-4.2-13.5-10l-7.9 6.1C6.6 42.6 14.6 48 24 48z"/></svg>
+        Sign in with Google
+      </button>
+      <p id="login-error" class="form-error" hidden></p>
+    </div>
+  </div>
+
+  <!-- Signed in but not on the staff list -->
+  <div id="screen-denied" class="center-screen" hidden>
+    <div class="card center-card">
+      <div class="brand-mark">305</div>
+      <h1>No access yet</h1>
+      <p class="muted">You signed in as <strong id="denied-email"></strong>, but this account is not on the staff list. Ask the dashboard admin to add you.</p>
+      <button class="btn" data-action="sign-out">Sign out</button>
+    </div>
+  </div>
+
+  <!-- App -->
+  <div id="screen-app" hidden>
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">305</div>
+        <div>Pink Pack Dashboard<small>Rides and resources</small></div>
+      </div>
+      <div class="user">
+        <span class="email" id="user-email"></span>
+        <button class="btn sm" data-action="sign-out">Sign out</button>
+      </div>
+    </header>
+    <nav class="tabs" role="tablist">
+      <button class="tab" role="tab" data-tab="requests" aria-selected="true">Ride requests<span class="count" id="tab-count-new" hidden></span></button>
+      <button class="tab" role="tab" data-tab="clients" aria-selected="false">Clients</button>
+      <button class="tab" role="tab" data-tab="resources" aria-selected="false">Resources</button>
+      <button class="tab" role="tab" data-tab="activity" aria-selected="false">Activity log</button>
+      <button class="tab" role="tab" data-tab="staff" aria-selected="false" id="tab-staff" hidden>Staff access</button>
+    </nav>
+
+    <main>
+      <!-- Requests -->
+      <section data-panel="requests">
+        <div class="kpis" id="kpis"></div>
+        <div class="section-head" style="margin-top:20px">
+          <div class="toolbar" id="status-filters"></div>
+          <input class="search" id="request-search" type="search" placeholder="Search client or address" />
+        </div>
+        <div class="card table-wrap" style="margin-top:12px">
+          <table>
+            <thead><tr><th>Pickup</th><th>Client</th><th>Route</th><th>Reason</th><th>Status</th><th>Received</th></tr></thead>
+            <tbody id="requests-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Clients -->
+      <section data-panel="clients" hidden>
+        <div class="section-head">
+          <div>
+            <h2>Clients</h2>
+            <p>Only people with a private link can request a ride. Add someone here, then send them their link.</p>
+          </div>
+          <div class="toolbar">
+            <input class="search" id="client-search" type="search" placeholder="Search clients" />
+            <button class="btn primary" data-action="new-client">Add client</button>
+          </div>
+        </div>
+        <div class="card table-wrap" style="margin-top:12px">
+          <table>
+            <thead><tr><th>Name</th><th>Contact</th><th>Status</th><th>Rides</th><th>Request link</th><th></th></tr></thead>
+            <tbody id="clients-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Resources -->
+      <section data-panel="resources" hidden>
+        <div class="section-head">
+          <div>
+            <h2>Resources</h2>
+            <p>Balances update automatically when a ride is booked against a resource.</p>
+          </div>
+          <div class="toolbar">
+            <button class="btn" data-action="new-resource">Add resource</button>
+            <button class="btn primary" data-action="new-transaction">Record a change</button>
+          </div>
+        </div>
+        <div class="resource-grid" id="resource-cards" style="margin-top:12px"></div>
+        <h3 style="margin-top:24px">History</h3>
+        <div class="card table-wrap" style="margin-top:10px">
+          <table>
+            <thead><tr><th>Date</th><th>Resource</th><th>Change</th><th>Description</th><th>Recorded by</th></tr></thead>
+            <tbody id="ledger-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Activity -->
+      <section data-panel="activity" hidden>
+        <div class="section-head">
+          <div>
+            <h2>Activity log</h2>
+            <p>Every change to clients, rides, resources and staff access. Most recent 300 shown.</p>
+          </div>
+        </div>
+        <div class="card" style="margin-top:12px"><ul class="activity" id="activity-list"></ul></div>
+      </section>
+
+      <!-- Staff -->
+      <section data-panel="staff" hidden>
+        <div class="section-head">
+          <div>
+            <h2>Staff access</h2>
+            <p>People listed here can sign in with Google using this email. Admins can manage this list.</p>
+          </div>
+          <button class="btn primary" data-action="new-staff">Add person</button>
+        </div>
+        <div class="card table-wrap" style="margin-top:12px">
+          <table>
+            <thead><tr><th>Name</th><th>Google email</th><th>Role</th><th>Added</th><th></th></tr></thead>
+            <tbody id="staff-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Request detail sheet -->
+  <dialog id="dlg-request" class="sheet">
+    <div class="dialog-head"><h2 id="req-title">Ride request</h2><button class="btn ghost sm" data-close>Close</button></div>
+    <div class="dialog-body" id="req-body"></div>
+  </dialog>
+
+  <!-- Client form -->
+  <dialog id="dlg-client">
+    <form method="dialog" id="form-client">
+      <div class="dialog-head"><h2 id="client-form-title">Add client</h2><button type="button" class="btn ghost sm" data-close>Close</button></div>
+      <div class="dialog-body">
+        <div class="notice">Do not record a diagnosis or any medical detail. "In treatment" is the only health information we keep.</div>
+        <div class="form-grid two">
+          <label class="field">First name<input name="first_name" required maxlength="80" /></label>
+          <label class="field">Last name<input name="last_name" maxlength="80" /></label>
+        </div>
+        <label class="field">Email <span class="hint">Where their request link is sent</span><input name="email" type="email" maxlength="200" /></label>
+        <label class="field">Phone<input name="phone" type="tel" maxlength="30" /></label>
+        <label class="check"><input type="checkbox" name="in_treatment" checked /> In treatment</label>
+        <p class="form-error" hidden></p>
+        <div class="form-actions"><button type="button" class="btn" data-close>Cancel</button><button class="btn primary" type="submit">Save</button></div>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Request link -->
+  <dialog id="dlg-link">
+    <div class="dialog-head"><h2>Request link</h2><button class="btn ghost sm" data-close>Close</button></div>
+    <div class="dialog-body" id="link-body"></div>
+  </dialog>
+
+  <!-- Resource form -->
+  <dialog id="dlg-resource">
+    <form method="dialog" id="form-resource">
+      <div class="dialog-head"><h2>Add resource</h2><button type="button" class="btn ghost sm" data-close>Close</button></div>
+      <div class="dialog-body">
+        <label class="field">Name<input name="name" required maxlength="80" placeholder="e.g. Lyft voucher codes" /></label>
+        <label class="field">Type
+          <select name="kind"><option value="funding">Funding (dollars)</option><option value="voucher">Vouchers (count)</option></select>
+        </label>
+        <label class="field">Notes<textarea name="notes" maxlength="300" placeholder="Source, restrictions, expiration"></textarea></label>
+        <p class="form-error" hidden></p>
+        <div class="form-actions"><button type="button" class="btn" data-close>Cancel</button><button class="btn primary" type="submit">Add</button></div>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Transaction form -->
+  <dialog id="dlg-transaction">
+    <form method="dialog" id="form-transaction">
+      <div class="dialog-head"><h2>Record a change</h2><button type="button" class="btn ghost sm" data-close>Close</button></div>
+      <div class="dialog-body">
+        <label class="field">Resource<select name="resource_id" required></select></label>
+        <div class="form-grid two">
+          <label class="field">Change
+            <select name="direction"><option value="add">Add (received)</option><option value="use">Use (spent)</option></select>
+          </label>
+          <label class="field"><span id="tx-amount-label">Amount</span><input name="amount" type="number" min="0.01" step="0.01" required /></label>
+        </div>
+        <label class="field">Date<input name="occurred_on" type="date" required /></label>
+        <label class="field">Description<input name="description" required maxlength="200" placeholder="e.g. Grant from Miami Foundation" /></label>
+        <p class="form-error" hidden></p>
+        <div class="form-actions"><button type="button" class="btn" data-close>Cancel</button><button class="btn primary" type="submit">Save</button></div>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Staff form -->
+  <dialog id="dlg-staff">
+    <form method="dialog" id="form-staff">
+      <div class="dialog-head"><h2>Add person</h2><button type="button" class="btn ghost sm" data-close>Close</button></div>
+      <div class="dialog-body">
+        <label class="field">Name<input name="full_name" maxlength="80" /></label>
+        <label class="field">Google email <span class="hint">The exact account they sign in with</span><input name="email" type="email" required maxlength="200" /></label>
+        <label class="field">Role
+          <select name="role"><option value="staff">Staff: full dashboard access</option><option value="admin">Admin: also manages staff access</option></select>
+        </label>
+        <p class="form-error" hidden></p>
+        <div class="form-actions"><button type="button" class="btn" data-close>Cancel</button><button class="btn primary" type="submit">Add</button></div>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+
+  <script type="module" src="assets/js/dashboard.js"></script>
+</body>
+</html>

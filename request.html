@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex, nofollow" />
+  <meta name="referrer" content="no-referrer" />
+  <title>Request a Ride · 305 Pink Pack</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="assets/css/styles.css" />
+</head>
+<body>
+  <div class="public">
+    <header>
+      <div class="brand-mark">305</div>
+      <div><h1>Request a ride</h1><p class="muted small">305 Pink Pack</p></div>
+    </header>
+
+    <div id="state-loading" class="card"><p class="muted">Checking your link…</p></div>
+
+    <div id="state-invalid" class="card" hidden>
+      <h2>This link is not active</h2>
+      <p class="muted" style="margin-top:8px">Ride requests need the personal link 305 Pink Pack sent you. If you used that link and still see this message, please call us at <a class="org-phone-link"><span class="org-phone"></span></a>.</p>
+    </div>
+
+    <form id="state-form" class="card" hidden novalidate>
+      <div class="form-grid">
+        <p id="greeting" style="font-weight:600"></p>
+        <label class="field">Pickup date and time
+          <input name="pickup_at" type="datetime-local" required />
+        </label>
+        <label class="field">Pickup address
+          <input name="pickup_address" required maxlength="300" autocomplete="street-address" placeholder="Street, city, ZIP" />
+        </label>
+        <label class="field">Where are you going?
+          <input name="dropoff_address" required maxlength="300" placeholder="Name of place and address" />
+        </label>
+        <label class="field">Why do you need the ride?
+          <select name="reason_category" required>
+            <option value="">Choose one</option>
+            <option value="treatment">Treatment appointment</option>
+            <option value="doctor_visit">Doctor visit or follow-up</option>
+            <option value="labs_scans">Lab work or scans</option>
+            <option value="pharmacy">Pharmacy pickup</option>
+            <option value="support_service">Support service or program</option>
+            <option value="other">Other</option>
+          </select>
+        </label>
+        <label class="field">Anything else we should know? <span class="hint">Optional. Please do not include medical details.</span>
+          <textarea name="reason_details" maxlength="300" placeholder="e.g. I use a walker, or I will have one companion"></textarea>
+        </label>
+        <label class="check"><input type="checkbox" name="return_trip" /> I also need a ride home</label>
+        <label class="field" id="return-field" hidden>Pickup time for the ride home <span class="hint">Your best estimate</span>
+          <input name="return_at" type="datetime-local" />
+        </label>
+        <label class="field">Best phone number to reach you <span class="hint">Optional if we already have it</span>
+          <input name="contact_phone" type="tel" maxlength="30" autocomplete="tel" />
+        </label>
+        <p class="notice info">Your ride is not confirmed until someone from 305 Pink Pack contacts you.</p>
+        <p class="form-error" id="form-error" hidden></p>
+        <button class="btn primary lg" type="submit">Send request</button>
+      </div>
+    </form>
+
+    <div id="state-done" class="card" hidden style="text-align:center; display:grid; gap:12px">
+      <div class="success-mark">✓</div>
+      <h2>Request received</h2>
+      <p class="muted" id="done-summary"></p>
+      <p class="muted">We will contact you to confirm the ride. If your plans change, call us at <a class="org-phone-link"><span class="org-phone"></span></a>.</p>
+      <div><button class="btn" id="btn-another">Request another ride</button></div>
+    </div>
+
+    <p class="foot">In a medical emergency, call 911.</p>
+  </div>
+
+  <script type="module" src="assets/js/request.js"></script>
+</body>
+</html>
