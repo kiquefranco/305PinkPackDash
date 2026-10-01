@@ -6,11 +6,11 @@
 // this key, decide who can see what.
 // =====================================================================
 
-export const SUPABASE_URL = 'https://YOUR-PROJECT-REF.supabase.co';
+export const SUPABASE_URL = 'https://wiwqpdyyabqdzqnbmzss.supabase.co';;
 
 // Use the "publishable" key (starts with sb_publishable_) or, on older
 // projects, the "anon public" key. Never paste the secret / service_role key.
-export const SUPABASE_KEY = 'YOUR-PUBLISHABLE-KEY';
+export const SUPABASE_KEY = 'sb_publishable_toJGA6yWF6oG6uWA9-Hf0g_gX85nju8';
 
 export const ORG_NAME = '305 Pink Pack';
 export const ORG_PHONE = '(305) 859-1224';
