@@ -56,12 +56,15 @@ $('#state-form').addEventListener('submit', async (e) => {
 
   btn.disabled = true;
   btn.textContent = 'Sending…';
-  const { error } = await supabase.rpc('submit_ride_request', {
+  // This form stays ride-only. The client-facing portal that covers every
+  // service is a separate build; see the project notes.
+  const { error } = await supabase.rpc('submit_service_request', {
     p_token: token,
-    p_pickup_at: fromLocalInput(pickup),
+    p_service_type: 'ride',
+    p_needed_at: fromLocalInput(pickup),
+    p_reason_category: form.reason_category.value,
     p_pickup_address: form.pickup_address.value,
     p_dropoff_address: form.dropoff_address.value,
-    p_reason_category: form.reason_category.value,
     p_reason_details: form.reason_details.value || null,
     p_return_trip: returnTrip,
     p_return_at: returnTrip ? fromLocalInput(form.return_at.value) : null,

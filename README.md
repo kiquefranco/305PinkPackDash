@@ -1,6 +1,6 @@
 # 305 Pink Pack Dashboard
 
-Internal dashboard for 305 Pink Pack. Staff schedule rides for the people Pink Pack serves and track funding and ride vouchers. Clients request rides through a private link that only Pink Pack sends.
+Internal dashboard for 305 Pink Pack. Staff handle service requests for the people Pink Pack serves and track funding and vouchers. Four services are supported: rides, self-care services, grocery gift cards, and child care. Clients request through a private link that only Pink Pack sends.
 
 Built by the Hyperion Council team, Fall 2026.
 
@@ -8,10 +8,10 @@ Built by the Hyperion Council team, Fall 2026.
 
 | Area | What it does |
 |---|---|
-| **Ride requests** | New requests appear on the dashboard live. Each one moves through Submitted, In review, Approved or Denied, and Fulfilled. |
-| **Booking** | When a ride is approved, staff record the provider, the confirmation number, and what it cost. The cost comes out of a funding pool or the voucher stock automatically. |
+| **Requests** | New requests appear on the dashboard live. Each one is tagged with its service and moves through Submitted, In review, Approved or Denied, and Fulfilled. Filter by service with the chips above the table. |
+| **Booking** | When a request is approved, staff record the provider, the confirmation number, and what it cost. The cost comes out of a funding pool or the voucher stock automatically. |
 | **Clients** | Staff add a client and send them a personal request link. Only people with a link can submit. Links can be turned off or replaced at any time. |
-| **Resources** | Balances for funding and ride vouchers, with a full history of every addition and use. |
+| **Resources** | Balances for funding and vouchers, with a full history of every addition and use. |
 | **Activity log** | Every change, who made it, and when. |
 | **Staff access** | Admins decide which Google accounts can sign in. |
 
@@ -37,13 +37,14 @@ The free Supabase plan includes a 500 MB database and 50,000 monthly active user
 
 ```
 index.html                     Staff dashboard
-request.html                   Client ride request form (opened from a private link)
+request.html                   Client ride request form (opened from a private link; rides only)
 assets/css/styles.css          Styles for both pages
 assets/js/config.js            Supabase URL and key, org name and phone  <- edit this
 assets/js/shared.js            Supabase connection and shared helpers
 assets/js/dashboard.js         Dashboard logic
 assets/js/request.js           Request form logic
 supabase/schema.sql            Database tables, security rules, functions
+supabase/migrations/           Changes to apply to a database that is already live
 supabase/seed.sql              First staff accounts and starting resources  <- edit this
 .github/workflows/keepalive.yml  Keeps the free Supabase project awake
 ```
@@ -124,13 +125,13 @@ GitHub Pages is free only for public repositories. A private repository with Pag
 
 **New client:** Clients > Add client > send the link from the dialog. **Email link** opens a pre-written email.
 
-**New request:** It shows up under Ride requests with a pink marker, and the tab shows a count. Open it and click **Start review**.
+**New request:** It shows up under Requests with a pink marker, and the tab shows a count. Open it and click **Start review**.
 
 **Decide:** Approve, or deny with a short note. Notes are visible only to staff.
 
-**Book:** On an approved request, enter the provider and confirmation number. Choose which resource paid for the ride and how much, then save. The balance updates immediately.
+**Book:** On an approved request, enter the provider and confirmation number. Choose which resource paid for it and how much, then save. The balance updates immediately.
 
-**Complete:** After the ride happens, click **Mark fulfilled**.
+**Complete:** After the service is delivered, click **Mark fulfilled**.
 
 **Add funds or vouchers:** Resources > **Add** on the resource card. Record the source in the description (for example, "Grant from Miami Foundation").
 
@@ -151,6 +152,16 @@ Then open `http://localhost:8000/`. Google sign-in works locally once `http://lo
 ## Changing the database later
 
 Edit `supabase/schema.sql` and re-run it in the SQL Editor. It is safe to re-run: existing tables and data are kept, and functions, policies and triggers are replaced. Adding a column to an existing table needs an `alter table ... add column if not exists ...` statement.
+
+Renaming or reshaping something that already holds data is different: `schema.sql` only creates tables that do not exist yet, so it will not touch them. Those changes go in a numbered file under `supabase/migrations/`, run once in the SQL Editor, and the same change is also written into `schema.sql` so a fresh install matches a migrated one.
+
+### Migrations to date
+
+| File | What it does | Run it if |
+|---|---|---|
+| `001_services.sql` | Turns ride requests into service requests covering rides, self-care, gift cards and child care | Your database was created before October 2026 and still has a `ride_requests` table |
+
+Migrations are safe to re-run. After running `001`, the client request form must be on the matching version of the code, since the function it calls was renamed.
 
 ## Limits to know
 

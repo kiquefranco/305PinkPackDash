@@ -1,5 +1,6 @@
 import {
-  supabase, isConfigured, REASONS, STATUSES, esc, fmtDateTime, fmtDate, fmtTime, timeAgo,
+  supabase, isConfigured, REASONS, STATUSES, SERVICE_TYPES, SERVICE_SHORT,
+  NEEDED_AT_LABEL, usesAddresses, esc, fmtDateTime, fmtDate, fmtTime, timeAgo,
   toLocalInput, fromLocalInput, fmtAmount, errMsg,
 } from './shared.js';
 import { ORG_NAME, ORG_PHONE } from './config.js';
@@ -18,6 +19,7 @@ const state = {
   audit: [],
   staff: [],
   filter: 'open',
+  serviceFilter: 'all',
   search: '',
   clientSearch: '',
   tab: 'requests',
@@ -26,9 +28,26 @@ const state = {
 };
 
 const OPEN = ['submitted', 'in_review', 'approved'];
+
+// Typed into the booking field. Suggestions only; staff can enter anything.
+// Task 4 replaces these with the real provider directory.
+const PROVIDER_SUGGESTIONS = {
+  ride: ['Uber Health', 'Uber', 'Lyft', 'Taxi', 'Volunteer driver'],
+  self_care: ['Oncology massage', 'Acupuncture', 'Counseling', 'Salon or wig service'],
+  gift_card: ['Publix', 'Winn-Dixie', 'Walmart', 'Instacart'],
+  child_care: ['Licensed sitter', 'Day care center', 'Family member'],
+};
+const PROVIDER_HINT = {
+  ride: 'e.g. Uber Health',
+  self_care: 'Who is providing it',
+  gift_card: 'Which store',
+  child_care: 'Who is providing care',
+};
 const clientById = (id) => state.clients.find((c) => c.id === id);
 const resourceById = (id) => state.resources.find((r) => r.id === id);
 const clientName = (c) => (c ? `${c.first_name} ${c.last_name || ''}`.trim() : 'Unknown client');
+const serviceLabel = (r) => SERVICE_TYPES[r.service_type] || r.service_type;
+const whenLabel = (r) => NEEDED_AT_LABEL[r.service_type] || 'Needed';
 
 // ---------------------------------------------------------------------
 // Screens and sign-in
@@ -102,7 +121,7 @@ async function enter(session) {
 async function loadAll() {
   const [clients, requests, resources, transactions, audit, staff] = await Promise.all([
     supabase.from('clients').select('*').order('first_name'),
-    supabase.from('ride_requests').select('*').order('pickup_at', { ascending: true }).limit(2000),
+    supabase.from('service_requests').select('*').order('needed_at', { ascending: true }).limit(2000),
     supabase.from('resource_balances').select('*').order('name'),
     supabase.from('resource_transactions').select('*')
       .order('occurred_on', { ascending: false }).order('created_at', { ascending: false }).limit(500),
@@ -132,12 +151,13 @@ function subscribe() {
   supabase
     .channel('dashboard')
     .on('postgres_changes', { event: '*', schema: 'public' }, (payload) => {
-      if (payload.table === 'ride_requests' && payload.eventType === 'INSERT') {
+      if (payload.table === 'service_requests' && payload.eventType === 'INSERT') {
         const id = payload.new.id;
         setTimeout(() => {
           const req = state.requests.find((r) => r.id === id);
           const c = req && clientById(req.client_id);
-          toast(`New ride request from ${c ? clientName(c) : 'a client'}. Click to open.`, 'new', () => openRequest(id));
+          const label = req ? (SERVICE_SHORT[req.service_type] || 'service').toLowerCase() : 'service';
+          toast(`New ${label} request from ${c ? clientName(c) : 'a client'}. Click to open.`, 'new', () => openRequest(id));
         }, 600);
       }
       scheduleReload();
@@ -295,36 +315,51 @@ function renderRequests() {
     ['denied', 'Denied', (r) => r.status === 'denied'],
     ['all', 'All', () => true],
   ];
+  const inService = (r) => state.serviceFilter === 'all' || r.service_type === state.serviceFilter;
   $('#status-filters').innerHTML = filters.map(([key, label, fn]) =>
-    `<button class="chip" data-filter="${key}" aria-pressed="${state.filter === key}">${esc(label)}<span class="n">${state.requests.filter(fn).length}</span></button>`,
+    `<button class="chip" data-filter="${key}" aria-pressed="${state.filter === key}">${esc(label)}<span class="n">${state.requests.filter((r) => inService(r) && fn(r)).length}</span></button>`,
   ).join('');
   $$('#status-filters .chip').forEach((b) => b.addEventListener('click', () => { state.filter = b.dataset.filter; renderRequests(); }));
 
+  const serviceFilters = [['all', 'All services'],
+    ...Object.entries(SERVICE_TYPES).map(([k, v]) => [k, v])];
+  $('#service-filters').innerHTML = serviceFilters.map(([key, label]) => {
+    const n = key === 'all' ? state.requests.length : state.requests.filter((r) => r.service_type === key).length;
+    return `<button class="chip" data-service="${esc(key)}" aria-pressed="${state.serviceFilter === key}">${esc(label)}<span class="n">${n}</span></button>`;
+  }).join('');
+  $$('#service-filters .chip').forEach((b) => b.addEventListener('click', () => { state.serviceFilter = b.dataset.service; renderRequests(); }));
+
   const pick = filters.find((f) => f[0] === state.filter)[2];
-  let rows = state.requests.filter(pick).filter((r) => {
-    if (!state.search) return true;
-    const c = clientById(r.client_id);
-    return [clientName(c), r.pickup_address, r.dropoff_address, c?.phone, c?.email]
-      .join(' ').toLowerCase().includes(state.search);
-  });
+  let rows = state.requests.filter(pick)
+    .filter((r) => state.serviceFilter === 'all' || r.service_type === state.serviceFilter)
+    .filter((r) => {
+      if (!state.search) return true;
+      const c = clientById(r.client_id);
+      return [clientName(c), serviceLabel(r), r.pickup_address, r.dropoff_address, c?.phone, c?.email]
+        .join(' ').toLowerCase().includes(state.search);
+    });
   const descending = ['fulfilled', 'denied', 'all'].includes(state.filter);
-  rows = rows.sort((a, b) => (new Date(a.pickup_at) - new Date(b.pickup_at)) * (descending ? -1 : 1));
+  rows = rows.sort((a, b) => (new Date(a.needed_at) - new Date(b.needed_at)) * (descending ? -1 : 1));
 
   if (!rows.length) {
-    $('#requests-body').innerHTML = `<tr><td colspan="6" class="empty">${state.requests.length ? 'No requests match this view.' : 'No ride requests yet. Add a client and send them their link to get started.'}</td></tr>`;
+    $('#requests-body').innerHTML = `<tr><td colspan="7" class="empty">${state.requests.length ? 'No requests match this view.' : 'No requests yet. Add a client and send them their link to get started.'}</td></tr>`;
     return;
   }
 
   $('#requests-body').innerHTML = rows.map((r) => {
     const c = clientById(r.client_id);
-    const past = new Date(r.pickup_at) < new Date() && OPEN.includes(r.status);
+    const past = new Date(r.needed_at) < new Date() && OPEN.includes(r.status);
+    const detail = usesAddresses(r.service_type)
+      ? `<div class="route"><span>${esc(r.pickup_address || '')}</span><span>${esc(r.dropoff_address || '')}</span></div>`
+      : `<div class="sub">${esc(r.provider_name || r.reason_details || '')}</div>${r.requested_amount ? `<div>${esc(fmtAmount('funding', r.requested_amount))} requested</div>` : ''}`;
     return `
       <tr class="clickable ${r.status === 'submitted' ? 'is-new' : ''}" data-id="${esc(r.id)}">
-        <td class="nowrap"><strong>${esc(fmtDateTime(r.pickup_at))}</strong>
+        <td class="nowrap"><span class="pill service ${esc(r.service_type)}">${esc(SERVICE_SHORT[r.service_type] || r.service_type)}</span></td>
+        <td class="nowrap"><strong>${esc(fmtDateTime(r.needed_at))}</strong>
           ${r.return_trip ? `<div class="sub">Return ${esc(fmtTime(r.return_at))}</div>` : ''}
-          ${past ? '<div class="sub" style="color:var(--red)">Pickup time has passed</div>' : ''}</td>
+          ${past ? `<div class="sub" style="color:var(--red)">${usesAddresses(r.service_type) ? 'Pickup time has passed' : 'Date has passed'}</div>` : ''}</td>
         <td>${esc(clientName(c))}<div class="sub">${esc(r.contact_phone || c?.phone || '')}</div></td>
-        <td><div class="route"><span>${esc(r.pickup_address)}</span><span>${esc(r.dropoff_address)}</span></div></td>
+        <td>${detail}</td>
         <td>${esc(REASONS[r.reason_category] || r.reason_category)}</td>
         <td><span class="pill ${esc(r.status)}">${esc(STATUSES[r.status])}</span></td>
         <td class="nowrap muted">${esc(timeAgo(r.created_at))}</td>
@@ -345,10 +380,11 @@ function renderRequestDrawer(id) {
   const r = state.requests.find((x) => x.id === id);
   if (!r) { $('#req-body').innerHTML = '<p class="muted">This request no longer exists.</p>'; return; }
   const c = clientById(r.client_id);
-  const charge = state.transactions.find((t) => t.ride_request_id === r.id);
+  const charge = state.transactions.find((t) => t.service_request_id === r.id);
+  const isRide = usesAddresses(r.service_type);
   const activeResources = state.resources.filter((x) => x.active || x.id === charge?.resource_id);
 
-  $('#req-title').textContent = `Ride for ${clientName(c)}`;
+  $('#req-title').textContent = `${serviceLabel(r)} for ${clientName(c)}`;
   const editWasOpen = $('#req-body details')?.open;
 
   const reached = {
@@ -399,12 +435,12 @@ function renderRequestDrawer(id) {
         <h3>Booking</h3>
         ${r.decision_note ? `<p class="small muted">Approval note: ${esc(r.decision_note)}</p>` : ''}
         <div class="form-grid two">
-          <label class="field">Ride provider
-            <input id="bk-provider" list="providers" value="${esc(r.ride_provider || '')}" placeholder="e.g. Uber Health" /></label>
-          <label class="field">Confirmation #
+          <label class="field">${isRide ? 'Ride provider' : 'Provider'}
+            <input id="bk-provider" list="providers" value="${esc(r.provider_name || '')}" placeholder="${esc(PROVIDER_HINT[r.service_type] || '')}" /></label>
+          <label class="field">${isRide ? 'Confirmation #' : 'Confirmation or code'}
             <input id="bk-confirmation" value="${esc(r.confirmation_code || '')}" /></label>
         </div>
-        <datalist id="providers"><option>Uber Health</option><option>Uber</option><option>Lyft</option><option>Taxi</option><option>Volunteer driver</option></datalist>
+        <datalist id="providers">${(PROVIDER_SUGGESTIONS[r.service_type] || []).map((x) => `<option>${esc(x)}</option>`).join('')}</datalist>
         <div class="form-grid two">
           <label class="field">Paid with
             <select id="bk-resource">
@@ -423,7 +459,7 @@ function renderRequestDrawer(id) {
       </div>
       <div class="panel tinted">
         ${r.status === 'approved'
-          ? `<h3>Ride completed?</h3>
+          ? `<h3>${isRide ? 'Ride completed?' : 'Service delivered?'}</h3>
              <div class="toolbar"><button class="btn success" data-do="fulfilled">Mark fulfilled</button>
              <button class="btn ghost" data-do="in_review">Move back to review</button></div>`
           : `<h3>Fulfilled ${esc(fmtDateTime(r.fulfilled_at))}</h3>
@@ -435,26 +471,33 @@ function renderRequestDrawer(id) {
     <p class="notice info" id="req-stale" hidden>Someone else just changed this request. Close and reopen it to see the latest version before saving.</p>
     <div class="steps">${steps.map(([label, done]) => `<span class="${done ? (label === 'Denied' ? 'bad' : 'done') : ''}">${esc(label)}</span>`).join('')}</div>
     <dl class="detail-list">
+      <dt>Service</dt><dd><span class="pill service ${esc(r.service_type)}">${esc(serviceLabel(r))}</span></dd>
       <dt>Client</dt><dd>${esc(clientName(c))}${c?.in_treatment ? ' <span class="pill neutral">In treatment</span>' : ''}</dd>
       <dt>Phone</dt><dd>${esc(r.contact_phone || c?.phone || 'Not provided')}${r.contact_phone && c?.phone && r.contact_phone !== c.phone ? `<div class="small muted">On file: ${esc(c.phone)}</div>` : ''}</dd>
       <dt>Email</dt><dd>${c?.email ? `<a href="mailto:${esc(c.email)}">${esc(c.email)}</a>` : 'Not provided'}</dd>
-      <dt>Pickup</dt><dd><strong>${esc(fmtDateTime(r.pickup_at))}</strong></dd>
-      <dt>Return trip</dt><dd>${r.return_trip ? esc(fmtDateTime(r.return_at)) : 'No'}</dd>
-      <dt>From</dt><dd>${esc(r.pickup_address)}</dd>
-      <dt>To</dt><dd>${esc(r.dropoff_address)}</dd>
+      <dt>${esc(whenLabel(r))}</dt><dd><strong>${esc(fmtDateTime(r.needed_at))}</strong></dd>
+      ${isRide ? `
+        <dt>Return trip</dt><dd>${r.return_trip ? esc(fmtDateTime(r.return_at)) : 'No'}</dd>
+        <dt>From</dt><dd>${esc(r.pickup_address || '')}</dd>
+        <dt>To</dt><dd>${esc(r.dropoff_address || '')}</dd>` : ''}
+      ${r.requested_amount ? `<dt>Amount requested</dt><dd>${esc(fmtAmount('funding', r.requested_amount))}</dd>` : ''}
       <dt>Reason</dt><dd>${esc(REASONS[r.reason_category] || r.reason_category)}${r.reason_details ? `<div class="small muted">${esc(r.reason_details)}</div>` : ''}</dd>
       <dt>Received</dt><dd>${esc(fmtDateTime(r.created_at))}</dd>
     </dl>
     ${actions}
     ${booking}
     <details class="panel">
-      <summary><strong>Edit ride details</strong></summary>
+      <summary><strong>Edit request details</strong></summary>
       <div class="form-grid" style="margin-top:12px">
-        <label class="field">Pickup time<input id="ed-pickup" type="datetime-local" value="${esc(toLocalInput(r.pickup_at))}" /></label>
-        <label class="check"><input id="ed-return-trip" type="checkbox" ${r.return_trip ? 'checked' : ''} /> Return trip</label>
-        <label class="field">Return time<input id="ed-return" type="datetime-local" value="${esc(toLocalInput(r.return_at))}" /></label>
-        <label class="field">From<input id="ed-from" value="${esc(r.pickup_address)}" maxlength="300" /></label>
-        <label class="field">To<input id="ed-to" value="${esc(r.dropoff_address)}" maxlength="300" /></label>
+        <label class="field">${esc(whenLabel(r))}<input id="ed-when" type="datetime-local" value="${esc(toLocalInput(r.needed_at))}" /></label>
+        ${isRide ? `
+          <label class="check"><input id="ed-return-trip" type="checkbox" ${r.return_trip ? 'checked' : ''} /> Return trip</label>
+          <label class="field">Return time<input id="ed-return" type="datetime-local" value="${esc(toLocalInput(r.return_at))}" /></label>
+          <label class="field">From<input id="ed-from" value="${esc(r.pickup_address || '')}" maxlength="300" /></label>
+          <label class="field">To<input id="ed-to" value="${esc(r.dropoff_address || '')}" maxlength="300" /></label>`
+        : `<label class="field">Amount requested <span class="hint">Leave blank if not a dollar amount</span>
+             <input id="ed-amount" type="number" min="0.01" step="0.01" value="${r.requested_amount ? esc(r.requested_amount) : ''}" /></label>`}
+        <label class="field">Notes<textarea id="ed-details" maxlength="300">${esc(r.reason_details || '')}</textarea></label>
         <label class="field">Contact phone<input id="ed-phone" value="${esc(r.contact_phone || '')}" maxlength="30" /></label>
         <p class="form-error" id="ed-error" hidden></p>
         <div><button class="btn" id="ed-save">Save changes</button></div>
@@ -464,7 +507,7 @@ function renderRequestDrawer(id) {
   const body = $('#req-body');
   if (editWasOpen) $('details', body).open = true;
   $$('[data-do]', body).forEach((b) => b.addEventListener('click', () => withBusy(b, () => changeStatus(r, b.dataset.do))));
-  $('#ed-save', body).addEventListener('click', (e) => withBusy(e.target, () => saveRideEdits(r)));
+  $('#ed-save', body).addEventListener('click', (e) => withBusy(e.target, () => saveRequestEdits(r)));
   if (booking) {
     const syncBooking = () => {
       const res = resourceById($('#bk-resource').value);
@@ -502,7 +545,7 @@ async function changeStatus(r, status) {
     if (!ok) return;
   }
 
-  const { error } = await supabase.from('ride_requests').update(patch).eq('id', r.id);
+  const { error } = await supabase.from('service_requests').update(patch).eq('id', r.id);
   if (error) return toast(errMsg(error), 'error');
   state.drawerDirty = false;
   toast(`Request marked ${STATUSES[status].toLowerCase()}.`);
@@ -524,7 +567,7 @@ async function saveBooking(r) {
     err.hidden = false;
     return;
   }
-  const { error } = await supabase.rpc('book_ride', {
+  const { error } = await supabase.rpc('fulfill_request', {
     p_request_id: r.id,
     p_provider: $('#bk-provider').value,
     p_confirmation: $('#bk-confirmation').value,
@@ -537,26 +580,38 @@ async function saveBooking(r) {
   await loadAll();
 }
 
-async function saveRideEdits(r) {
+async function saveRequestEdits(r) {
   const err = $('#ed-error');
-  const pickup = fromLocalInput($('#ed-pickup').value);
-  const returnTrip = $('#ed-return-trip').checked;
-  const ret = returnTrip ? fromLocalInput($('#ed-return').value) : null;
-  const from = $('#ed-from').value.trim();
-  const to = $('#ed-to').value.trim();
+  const isRide = usesAddresses(r.service_type);
+  const when = fromLocalInput($('#ed-when').value);
+  const patch = {
+    needed_at: when,
+    reason_details: $('#ed-details').value.trim() || null,
+    contact_phone: $('#ed-phone').value.trim() || null,
+  };
   let msg = '';
-  if (!pickup) msg = 'Pickup time is required.';
-  else if (!from || !to) msg = 'Both addresses are required.';
-  else if (returnTrip && (!ret || new Date(ret) <= new Date(pickup))) msg = 'Return time must be after pickup.';
+  if (!when) msg = `${whenLabel(r)} is required.`;
+
+  if (isRide) {
+    const returnTrip = $('#ed-return-trip').checked;
+    const ret = returnTrip ? fromLocalInput($('#ed-return').value) : null;
+    const from = $('#ed-from').value.trim();
+    const to = $('#ed-to').value.trim();
+    if (!msg && (!from || !to)) msg = 'Both addresses are required.';
+    else if (!msg && returnTrip && (!ret || new Date(ret) <= new Date(when))) msg = 'Return time must be after pickup.';
+    Object.assign(patch, { return_trip: returnTrip, return_at: ret, pickup_address: from, dropoff_address: to });
+  } else {
+    const raw = $('#ed-amount').value.trim();
+    const amount = raw === '' ? null : Number(raw);
+    if (!msg && amount !== null && !(amount > 0)) msg = 'Enter an amount greater than zero, or leave it blank.';
+    patch.requested_amount = amount;
+  }
   if (msg) { err.textContent = msg; err.hidden = false; return; }
 
-  const { error } = await supabase.from('ride_requests').update({
-    pickup_at: pickup, return_trip: returnTrip, return_at: ret,
-    pickup_address: from, dropoff_address: to, contact_phone: $('#ed-phone').value.trim() || null,
-  }).eq('id', r.id);
+  const { error } = await supabase.from('service_requests').update(patch).eq('id', r.id);
   if (error) { err.textContent = errMsg(error); err.hidden = false; return; }
   state.drawerDirty = false;
-  toast('Ride details updated.');
+  toast('Request updated.');
   await loadAll();
 }
 
@@ -579,14 +634,14 @@ function renderClients() {
     return;
   }
   $('#clients-body').innerHTML = rows.map((c) => {
-    const rides = state.requests.filter((r) => r.client_id === c.id);
-    const done = rides.filter((r) => r.status === 'fulfilled').length;
+    const reqs = state.requests.filter((r) => r.client_id === c.id);
+    const done = reqs.filter((r) => r.status === 'fulfilled').length;
     return `
       <tr data-id="${esc(c.id)}">
         <td><strong>${esc(clientName(c))}</strong><div class="sub">Added ${esc(fmtDate(c.created_at))}</div></td>
         <td>${esc(c.email || '')}<div class="sub">${esc(c.phone || '')}</div></td>
         <td>${c.in_treatment ? '<span class="pill neutral">In treatment</span>' : '<span class="muted small">Not in treatment</span>'}</td>
-        <td class="num">${rides.length}<div class="sub">${done} fulfilled</div></td>
+        <td class="num">${reqs.length}<div class="sub">${done} fulfilled</div></td>
         <td>${c.request_link_active ? '<span class="pill fulfilled">Active</span>' : '<span class="pill denied">Off</span>'}</td>
         <td class="nowrap" style="text-align:right">
           <button class="btn sm" data-client-link>Link</button>
@@ -731,11 +786,11 @@ function renderResources() {
         <td class="nowrap">${esc(fmtDate(t.occurred_on))}</td>
         <td>${esc(r?.name || '')}</td>
         <td class="nowrap num ${t.amount < 0 ? 'amount-neg' : 'amount-pos'}">${t.amount > 0 ? '+' : ''}${esc(fmtAmount(r?.kind, t.amount))}</td>
-        <td>${esc(t.description)}${t.ride_request_id ? ` <button class="btn sm ghost" data-open-ride="${esc(t.ride_request_id)}">View ride</button>` : ''}</td>
+        <td>${esc(t.description)}${t.service_request_id ? ` <button class="btn sm ghost" data-open-request="${esc(t.service_request_id)}">View request</button>` : ''}</td>
         <td class="small muted">${esc(t.created_by || '')}</td>
       </tr>`;
   }).join('') : '<tr><td colspan="5" class="empty">No history yet.</td></tr>';
-  $$('#ledger-body [data-open-ride]').forEach((b) => b.addEventListener('click', () => openRequest(b.dataset.openRide)));
+  $$('#ledger-body [data-open-request]').forEach((b) => b.addEventListener('click', () => openRequest(b.dataset.openRequest)));
 }
 
 function openResourceForm() {
@@ -809,23 +864,24 @@ async function saveTransaction(e) {
 
 const TABLE_LABELS = {
   staff: 'staff access', clients: 'client', resources: 'resource',
-  ride_requests: 'ride request', resource_transactions: 'resource history',
+  service_requests: 'service request', resource_transactions: 'resource history',
 };
 const FIELD_LABELS = {
-  status: 'status', pickup_at: 'pickup', return_at: 'return time', return_trip: 'return trip',
-  pickup_address: 'from', dropoff_address: 'to', decision_note: 'note', ride_provider: 'provider',
+  status: 'status', needed_at: 'needed', return_at: 'return time', return_trip: 'return trip',
+  pickup_address: 'from', dropoff_address: 'to', decision_note: 'note', provider_name: 'provider',
   confirmation_code: 'confirmation #', booked_at: 'booked', fulfilled_at: 'fulfilled', contact_phone: 'phone',
   first_name: 'first name', last_name: 'last name', email: 'email', phone: 'phone', in_treatment: 'in treatment',
   request_link_active: 'request link on', role: 'role', full_name: 'name', name: 'name', active: 'active',
   notes: 'notes', amount: 'amount', description: 'description', reason_category: 'reason', reason_details: 'reason details',
 };
-const HIDDEN_FIELDS = new Set(['updated_at', 'created_at', 'id', 'request_token', 'client_id', 'created_by', 'resource_id', 'ride_request_id']);
+const HIDDEN_FIELDS = new Set(['updated_at', 'created_at', 'id', 'request_token', 'client_id', 'created_by', 'resource_id', 'service_request_id']);
 
 function fmtValue(key, v) {
   if (v === null || v === undefined || v === '') return '(blank)';
   if (typeof v === 'boolean') return v ? 'yes' : 'no';
   if (key === 'status') return STATUSES[v] || v;
   if (key === 'reason_category') return REASONS[v] || v;
+  if (key === 'service_type') return SERVICE_TYPES[v] || v;
   if (/_at$/.test(key)) return fmtDateTime(v);
   return String(v).length > 60 ? `${String(v).slice(0, 60)}…` : String(v);
 }
@@ -834,9 +890,10 @@ function subjectOf(row) {
   const d = row.new_data || row.old_data || {};
   switch (row.table_name) {
     case 'clients': return `${d.first_name || ''} ${d.last_name || ''}`.trim();
-    case 'ride_requests': {
+    case 'service_requests': {
       const c = clientById(d.client_id);
-      return `${c ? clientName(c) : 'client'}, pickup ${fmtDateTime(d.pickup_at)}`;
+      const label = SERVICE_SHORT[d.service_type] || 'request';
+      return `${label.toLowerCase()} for ${c ? clientName(c) : 'client'}, ${fmtDateTime(d.needed_at)}`;
     }
     case 'resources': return d.name;
     case 'resource_transactions': {

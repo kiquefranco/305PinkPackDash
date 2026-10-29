@@ -6,13 +6,53 @@ export const isConfigured =
 
 export const supabase = isConfigured ? createClient(SUPABASE_URL, SUPABASE_KEY) : null;
 
+// The kinds of support Pink Pack provides. Rides are one of four.
+export const SERVICE_TYPES = {
+  ride: 'Ride',
+  self_care: 'Self-care service',
+  gift_card: 'Grocery gift card',
+  child_care: 'Child care',
+};
+
+// Short labels for tables and chips.
+export const SERVICE_SHORT = {
+  ride: 'Ride',
+  self_care: 'Self-care',
+  gift_card: 'Gift card',
+  child_care: 'Child care',
+};
+
 export const REASONS = {
   treatment: 'Treatment appointment',
   doctor_visit: 'Doctor visit or follow-up',
   labs_scans: 'Lab work or scans',
   pharmacy: 'Pharmacy pickup',
   support_service: 'Support service or program',
+  groceries: 'Groceries and food',
+  household: 'Household support',
+  wellness: 'Wellness and recovery',
+  child_care: 'Child care',
   other: 'Other',
+};
+
+// Which reasons make sense for each service. Staff and client forms
+// both read from this so the two never drift apart.
+export const REASONS_BY_SERVICE = {
+  ride: ['treatment', 'doctor_visit', 'labs_scans', 'pharmacy', 'support_service', 'other'],
+  self_care: ['wellness', 'treatment', 'support_service', 'other'],
+  gift_card: ['groceries', 'household', 'other'],
+  child_care: ['child_care', 'treatment', 'doctor_visit', 'other'],
+};
+
+// Rides are the only service that involves travel.
+export const usesAddresses = (serviceType) => serviceType === 'ride';
+
+// What the "when" field means for each service.
+export const NEEDED_AT_LABEL = {
+  ride: 'Pickup date and time',
+  self_care: 'Preferred date and time',
+  gift_card: 'Needed by',
+  child_care: 'Care needed on',
 };
 
 export const STATUSES = {

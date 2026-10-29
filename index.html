@@ -54,7 +54,7 @@
     <header class="topbar">
       <div class="brand">
         <div class="brand-mark">305</div>
-        <div>Pink Pack Dashboard<small>Rides and resources</small></div>
+        <div>Pink Pack Dashboard<small>Services and resources</small></div>
       </div>
       <div class="user">
         <span class="email" id="user-email"></span>
@@ -62,7 +62,7 @@
       </div>
     </header>
     <nav class="tabs" role="tablist">
-      <button class="tab" role="tab" data-tab="requests" aria-selected="true">Ride requests<span class="count" id="tab-count-new" hidden></span></button>
+      <button class="tab" role="tab" data-tab="requests" aria-selected="true">Requests<span class="count" id="tab-count-new" hidden></span></button>
       <button class="tab" role="tab" data-tab="clients" aria-selected="false">Clients</button>
       <button class="tab" role="tab" data-tab="resources" aria-selected="false">Resources</button>
       <button class="tab" role="tab" data-tab="activity" aria-selected="false">Activity log</button>
@@ -73,13 +73,14 @@
       <!-- Requests -->
       <section data-panel="requests">
         <div class="kpis" id="kpis"></div>
-        <div class="section-head" style="margin-top:20px">
+        <div class="toolbar" id="service-filters" style="margin-top:20px"></div>
+        <div class="section-head" style="margin-top:12px">
           <div class="toolbar" id="status-filters"></div>
-          <input class="search" id="request-search" type="search" placeholder="Search client or address" />
+          <input class="search" id="request-search" type="search" placeholder="Search client, service or address" />
         </div>
         <div class="card table-wrap" style="margin-top:12px">
           <table>
-            <thead><tr><th>Pickup</th><th>Client</th><th>Route</th><th>Reason</th><th>Status</th><th>Received</th></tr></thead>
+            <thead><tr><th>Service</th><th>When</th><th>Client</th><th>Details</th><th>Reason</th><th>Status</th><th>Received</th></tr></thead>
             <tbody id="requests-body"></tbody>
           </table>
         </div>
@@ -90,7 +91,7 @@
         <div class="section-head">
           <div>
             <h2>Clients</h2>
-            <p>Only people with a private link can request a ride. Add someone here, then send them their link.</p>
+            <p>Only people with a private link can submit a request. Add someone here, then send them their link.</p>
           </div>
           <div class="toolbar">
             <input class="search" id="client-search" type="search" placeholder="Search clients" />
@@ -99,7 +100,7 @@
         </div>
         <div class="card table-wrap" style="margin-top:12px">
           <table>
-            <thead><tr><th>Name</th><th>Contact</th><th>Status</th><th>Rides</th><th>Request link</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>Contact</th><th>Status</th><th>Requests</th><th>Request link</th><th></th></tr></thead>
             <tbody id="clients-body"></tbody>
           </table>
         </div>
@@ -110,7 +111,7 @@
         <div class="section-head">
           <div>
             <h2>Resources</h2>
-            <p>Balances update automatically when a ride is booked against a resource.</p>
+            <p>Balances update automatically when a request is fulfilled against a resource.</p>
           </div>
           <div class="toolbar">
             <button class="btn" data-action="new-resource">Add resource</button>
@@ -132,7 +133,7 @@
         <div class="section-head">
           <div>
             <h2>Activity log</h2>
-            <p>Every change to clients, rides, resources and staff access. Most recent 300 shown.</p>
+            <p>Every change to clients, requests, resources and staff access. Most recent 300 shown.</p>
           </div>
         </div>
         <div class="card" style="margin-top:12px"><ul class="activity" id="activity-list"></ul></div>
@@ -159,7 +160,7 @@
 
   <!-- Request detail sheet -->
   <dialog id="dlg-request" class="sheet">
-    <div class="dialog-head"><h2 id="req-title">Ride request</h2><button class="btn ghost sm" data-close>Close</button></div>
+    <div class="dialog-head"><h2 id="req-title">Request</h2><button class="btn ghost sm" data-close>Close</button></div>
     <div class="dialog-body" id="req-body"></div>
   </dialog>
 
