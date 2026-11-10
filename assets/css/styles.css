@@ -248,6 +248,56 @@ dialog.sheet .dialog-body { overflow-y: auto; max-height: calc(100vh - 60px); }
 /* 16px keeps iPhones from zooming into fields */
 .public input, .public select, .public textarea { font-size: 16px; }
 .public .foot { font-size: 13px; color: var(--muted); text-align: center; }
+.public h2 { font-size: 17px; }
+
+/* ---------- Member page ---------- */
+.member-greeting { font-size: 18px; font-weight: 700; }
+
+.balance-hero {
+  margin-top: 14px;
+  padding: 18px;
+  border-radius: var(--radius);
+  background: var(--pink-soft);
+}
+.balance-label {
+  font-size: 12px; font-weight: 600; color: var(--pink-dark);
+  text-transform: uppercase; letter-spacing: .04em;
+}
+.balance-amount {
+  font-size: 34px; font-weight: 800; color: var(--pink-dark);
+  margin-top: 2px; font-variant-numeric: tabular-nums;
+}
+.balance-hero .meter { background: rgba(214, 58, 122, .18); }
+.balance-hero .meter span { background: var(--pink); }
+.balance-hero .meter.low span { background: var(--red); }
+.balance-sub { font-size: 13px; color: var(--ink-2); margin-top: 8px; }
+
+.member-facts {
+  display: grid; grid-template-columns: auto 1fr; gap: 6px 16px;
+  margin: 16px 0 0; font-size: 14px;
+}
+.member-facts dt { color: var(--muted); }
+.member-facts dd { margin: 0; font-weight: 600; }
+
+.catalog-group { padding-top: 16px; }
+.catalog-group + .catalog-group { border-top: 1px solid var(--line); }
+.catalog-group h3 { font-size: 15px; }
+.catalog-group p { margin-top: 4px; }
+
+.vendor-list { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 12px; }
+.vendor-list li {
+  padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg);
+}
+.vendor-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.vendor-cost {
+  font-weight: 700; color: var(--pink-dark); white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 420px) {
+  .balance-amount { font-size: 28px; }
+  .member-facts { grid-template-columns: 1fr; gap: 2px; }
+  .member-facts dd { margin-bottom: 8px; }
+}
 .success-mark {
   width: 56px; height: 56px; border-radius: 50%; background: var(--green-soft); color: var(--green);
   display: grid; place-items: center; font-size: 28px; font-weight: 700; margin: 0 auto;

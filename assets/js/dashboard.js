@@ -1,6 +1,8 @@
 import {
   supabase, isConfigured, REASONS, STATUSES, SERVICE_TYPES, SERVICE_SHORT,
-  NEEDED_AT_LABEL, usesAddresses, esc, fmtDateTime, fmtDate, fmtTime, timeAgo,
+  NEEDED_AT_LABEL, usesAddresses, MEMBER_GROUPS, GIFT_CARD_STORES, GIFT_CARD_FORMATS,
+  GIFT_CARD_DELIVERY, CHILD_CARE_TYPES,
+  esc, fmtDateTime, fmtDate, fmtTime, timeAgo,
   toLocalInput, fromLocalInput, fmtAmount, errMsg,
 } from './shared.js';
 import { ORG_NAME, ORG_PHONE } from './config.js';
@@ -18,6 +20,7 @@ const state = {
   transactions: [],
   balances: [],
   allocations: [],
+  providers: [],
   settings: {},
   audit: [],
   staff: [],
@@ -40,6 +43,15 @@ const PROVIDER_SUGGESTIONS = {
   gift_card: ['Publix', 'Winn-Dixie', 'Walmart', 'Instacart'],
   child_care: ['Licensed sitter', 'Day care center', 'Family member'],
 };
+// The directory is the real list. The hardcoded names below are only a
+// fallback for service types nobody has added vendors for yet.
+const providerOptions = (serviceType) => {
+  const fromDirectory = state.providers
+    .filter((p) => p.active && p.service_type === serviceType)
+    .map((p) => p.name);
+  return fromDirectory.length ? fromDirectory : (PROVIDER_SUGGESTIONS[serviceType] || []);
+};
+
 const PROVIDER_HINT = {
   ride: 'e.g. Uber Health',
   self_care: 'Who is providing it',
@@ -51,7 +63,16 @@ const resourceById = (id) => state.resources.find((r) => r.id === id);
 const clientName = (c) => (c ? `${c.first_name} ${c.last_name || ''}`.trim() : 'Unknown client');
 const serviceLabel = (r) => SERVICE_TYPES[r.service_type] || r.service_type;
 const balanceFor = (clientId) => state.balances.find((b) => b.client_id === clientId)
-  || { allocated: 0, spent: 0, remaining: 0 };
+  || { allocated: 0, spent: 0, committed: 0, remaining: 0, available: 0 };
+const providerById = (id) => state.providers.find((p) => p.id === id);
+const expiryLabel = (c) => (c.services_expire_on
+  ? `Until ${fmtDate(c.services_expire_on)}` : 'Does not expire');
+// A date-only string parses as UTC midnight, which is the previous
+// evening in Miami. Both sides are pinned to midday so the comparison
+// is about calendar days, not clock hours.
+const atMidday = (d) => new Date(`${d}T12:00:00`);
+const today = () => atMidday(new Date().toLocaleDateString('en-CA'));
+const isExpired = (c) => !!c.services_expire_on && atMidday(c.services_expire_on) < today();
 const whenLabel = (r) => NEEDED_AT_LABEL[r.service_type] || 'Needed';
 
 // ---------------------------------------------------------------------
@@ -124,7 +145,7 @@ async function enter(session) {
 // ---------------------------------------------------------------------
 
 async function loadAll() {
-  const [clients, requests, resources, transactions, balances, allocations, settings, audit, staff] =
+  const [clients, requests, resources, transactions, balances, allocations, settings, providers, audit, staff] =
     await Promise.all([
       supabase.from('clients').select('*').order('first_name'),
       supabase.from('service_requests').select('*').order('needed_at', { ascending: true }).limit(2000),
@@ -134,11 +155,12 @@ async function loadAll() {
       supabase.from('client_balances').select('*'),
       supabase.from('client_allocations').select('*').order('granted_on', { ascending: false }),
       supabase.from('app_settings').select('*'),
+      supabase.from('providers').select('*').order('service_type').order('sort_order'),
       supabase.from('audit_log').select('*').order('changed_at', { ascending: false }).limit(300),
       supabase.from('staff').select('*').order('created_at'),
     ]);
-  const failed = [clients, requests, resources, transactions, balances, allocations, settings, audit, staff]
-    .find((r) => r.error);
+  const failed = [clients, requests, resources, transactions, balances, allocations, settings,
+    providers, audit, staff].find((r) => r.error);
   if (failed) toast(`Could not load data: ${errMsg(failed.error)}`, 'error');
 
   state.clients = clients.data || [];
@@ -148,6 +170,7 @@ async function loadAll() {
   state.balances = balances.data || [];
   state.allocations = allocations.data || [];
   state.settings = Object.fromEntries((settings.data || []).map((r) => [r.key, r.value]));
+  state.providers = providers.data || [];
   state.audit = audit.data || [];
   state.staff = staff.data || [];
   renderAll();
@@ -197,6 +220,7 @@ function wireApp() {
     if (closeBtn) closeBtn.closest('dialog').close();
     const act = e.target.closest('[data-action]')?.dataset.action;
     if (act === 'new-client') openClientForm();
+    if (act === 'new-provider') openProviderForm();
     if (act === 'new-resource') openResourceForm();
     if (act === 'new-transaction') openTransactionForm();
     if (act === 'new-staff') openStaffForm();
@@ -209,6 +233,7 @@ function wireApp() {
   $('#dlg-request').addEventListener('input', () => { state.drawerDirty = true; });
 
   $('#form-client').addEventListener('submit', saveClient);
+  $('#form-provider').addEventListener('submit', saveProvider);
   $('#form-resource').addEventListener('submit', saveResource);
   $('#form-transaction').addEventListener('submit', saveTransaction);
   $('#form-staff').addEventListener('submit', saveStaff);
@@ -270,6 +295,7 @@ function renderAll() {
   renderKpis();
   renderRequests();
   renderClients();
+  renderProviders();
   renderResources();
   renderActivity();
   renderStaff();
@@ -396,6 +422,7 @@ function renderRequestDrawer(id) {
   const charge = state.transactions.find((t) => t.service_request_id === r.id);
   const isRide = usesAddresses(r.service_type);
   const bal = balanceFor(r.client_id);
+  const prov = providerById(r.provider_id);
   const activeResources = state.resources.filter((x) => x.active || x.id === charge?.resource_id);
 
   $('#req-title').textContent = `${serviceLabel(r)} for ${clientName(c)}`;
@@ -450,11 +477,11 @@ function renderRequestDrawer(id) {
         ${r.decision_note ? `<p class="small muted">Approval note: ${esc(r.decision_note)}</p>` : ''}
         <div class="form-grid two">
           <label class="field">${isRide ? 'Ride provider' : 'Provider'}
-            <input id="bk-provider" list="providers" value="${esc(r.provider_name || '')}" placeholder="${esc(PROVIDER_HINT[r.service_type] || '')}" /></label>
+            <input id="bk-provider" list="providers" value="${esc(r.provider_name || prov?.name || '')}" placeholder="${esc(PROVIDER_HINT[r.service_type] || '')}" /></label>
           <label class="field">${isRide ? 'Confirmation #' : 'Confirmation or code'}
             <input id="bk-confirmation" value="${esc(r.confirmation_code || '')}" /></label>
         </div>
-        <datalist id="providers">${(PROVIDER_SUGGESTIONS[r.service_type] || []).map((x) => `<option>${esc(x)}</option>`).join('')}</datalist>
+        <datalist id="providers">${providerOptions(r.service_type).map((x) => `<option>${esc(x)}</option>`).join('')}</datalist>
         <p class="notice info" style="margin-top:4px">
           ${esc(clientName(c))} has <strong>${esc(fmtAmount('funding', bal.remaining))}</strong> left
           of ${esc(fmtAmount('funding', bal.allocated))}.
@@ -498,6 +525,20 @@ function renderRequestDrawer(id) {
         <dt>Return trip</dt><dd>${r.return_trip ? esc(fmtDateTime(r.return_at)) : 'No'}</dd>
         <dt>From</dt><dd>${esc(r.pickup_address || '')}</dd>
         <dt>To</dt><dd>${esc(r.dropoff_address || '')}</dd>` : ''}
+      ${r.service_type === 'self_care' && prov ? `
+        <dt>Service</dt><dd>${esc(prov.name)}
+          ${prov.in_home ? '<div class="small muted">In the member\'s home</div>' : ''}
+          ${prov.address ? `<div class="small muted">${esc(prov.address)}</div>` : ''}
+          <div class="small muted">Text ${esc(prov.contact_phone || '')}${prov.contact_name ? ` (${esc(prov.contact_name)})` : ''}</div>
+          <div class="small muted">The member books this themselves.</div></dd>` : ''}
+      ${r.service_type === 'gift_card' ? `
+        <dt>Card</dt><dd>${esc(GIFT_CARD_STORES[r.gift_card_store] || '')},
+          ${esc((GIFT_CARD_FORMATS[r.gift_card_format] || '').toLowerCase())}
+          ${r.gift_card_delivery ? `<div class="small muted">${esc(GIFT_CARD_DELIVERY[r.gift_card_delivery])}</div>` : ''}</dd>` : ''}
+      ${r.service_type === 'child_care' ? `
+        <dt>Care type</dt><dd>${esc(CHILD_CARE_TYPES[r.child_care_type] || '')}</dd>
+        <dt>Pay to</dt><dd>${esc(r.vendor_name || '')}<div class="small muted">${esc(r.vendor_contact || '')}</div></dd>
+        <dt>Covers</dt><dd>${esc(r.service_period || '')}</dd>` : ''}
       ${r.requested_amount ? `<dt>Amount requested</dt><dd>${esc(fmtAmount('funding', r.requested_amount))}</dd>` : ''}
       <dt>Reason</dt><dd>${esc(REASONS[r.reason_category] || r.reason_category)}${r.reason_details ? `<div class="small muted">${esc(r.reason_details)}</div>` : ''}</dd>
       <dt>Received</dt><dd>${esc(fmtDateTime(r.created_at))}</dd>
@@ -660,7 +701,8 @@ function requestLink(c) {
 
 function renderClients() {
   const rows = state.clients.filter((c) => !state.clientSearch
-    || [clientName(c), c.email, c.phone].join(' ').toLowerCase().includes(state.clientSearch));
+    || [clientName(c), c.email, c.phone, MEMBER_GROUPS[c.member_group] || '']
+        .join(' ').toLowerCase().includes(state.clientSearch));
 
   if (!rows.length) {
     $('#clients-body').innerHTML = `<tr><td colspan="7" class="empty">${state.clients.length ? 'No clients match.' : 'No clients yet. Click "Add client" to create the first one.'}</td></tr>`;
@@ -670,16 +712,22 @@ function renderClients() {
     const reqs = state.requests.filter((r) => r.client_id === c.id);
     const done = reqs.filter((r) => r.status === 'fulfilled').length;
     const b = balanceFor(c.id);
-    const pct = b.allocated > 0 ? Math.max(0, Math.min(100, (b.remaining / b.allocated) * 100)) : 0;
+    const pct = b.allocated > 0 ? Math.max(0, Math.min(100, (b.available / b.allocated) * 100)) : 0;
     const low = b.allocated > 0 && pct <= 15;
+    const expired = isExpired(c);
     return `
       <tr data-id="${esc(c.id)}">
         <td><strong>${esc(clientName(c))}</strong><div class="sub">Added ${esc(fmtDate(c.created_at))}</div></td>
         <td>${esc(c.email || '')}<div class="sub">${esc(c.phone || '')}</div></td>
-        <td>${c.in_treatment ? '<span class="pill neutral">In treatment</span>' : '<span class="muted small">Not in treatment</span>'}</td>
+        <td>
+          ${c.member_group ? `<span class="pill neutral">${esc(MEMBER_GROUPS[c.member_group])}</span>` : ''}
+          ${c.in_treatment ? '<span class="pill neutral">In treatment</span>' : ''}
+          <div class="sub">Member since ${esc(fmtDate(c.member_since))}</div>
+          <div class="sub"${expired ? ' style="color:var(--red)"' : ''}>${expired ? `Ended ${esc(fmtDate(c.services_expire_on))}` : esc(expiryLabel(c))}</div>
+        </td>
         <td class="num">
-          <strong${low ? ' style="color:var(--red)"' : ''}>${esc(fmtAmount('funding', b.remaining))}</strong>
-          <div class="sub">of ${esc(fmtAmount('funding', b.allocated))}</div>
+          <strong${low ? ' style="color:var(--red)"' : ''}>${esc(fmtAmount('funding', b.available))}</strong>
+          <div class="sub">of ${esc(fmtAmount('funding', b.allocated))}${Number(b.committed) > 0 ? `, ${esc(fmtAmount('funding', b.committed))} pending` : ''}</div>
           <div class="meter${low ? ' low' : ''}"><span style="width:${pct.toFixed(1)}%"></span></div>
         </td>
         <td class="num">${reqs.length}<div class="sub">${done} fulfilled</div></td>
@@ -711,8 +759,22 @@ function openClientForm(c = null) {
     form.last_name.value = c.last_name || '';
     form.email.value = c.email || '';
     form.phone.value = c.phone || '';
+    form.member_since.value = c.member_since || '';
+    form.member_group.value = c.member_group || '';
+    form.services_expire_on.value = c.services_expire_on || '';
+    form.no_expiry.checked = !c.services_expire_on;
     form.in_treatment.checked = c.in_treatment;
+  } else {
+    form.member_since.value = new Date().toISOString().slice(0, 10);
+    form.no_expiry.checked = true;
   }
+
+  // "Does not expire" and a cutoff date are the same decision, so only
+  // one of them is on screen at a time.
+  const syncExpiry = () => { $('#expiry-field').hidden = form.no_expiry.checked; };
+  form.no_expiry.onchange = syncExpiry;
+  syncExpiry();
+
   $('#dlg-client').showModal();
 }
 
@@ -726,9 +788,16 @@ async function saveClient(e) {
       last_name: form.last_name.value.trim(),
       email: form.email.value.trim().toLowerCase() || null,
       phone: form.phone.value.trim() || null,
+      member_since: form.member_since.value || null,
+      member_group: form.member_group.value || null,
+      services_expire_on: form.no_expiry.checked ? null : (form.services_expire_on.value || null),
       in_treatment: form.in_treatment.checked,
     };
     if (!row.first_name) return formError(form, 'First name is required.');
+    if (!row.member_since) return formError(form, 'Member since date is required.');
+    if (!form.no_expiry.checked && !row.services_expire_on) {
+      return formError(form, 'Enter a date, or tick "Direct services do not expire".');
+    }
     const q = editingClientId
       ? supabase.from('clients').update(row).eq('id', editingClientId).select().single()
       : supabase.from('clients').insert(row).select().single();
@@ -839,6 +908,96 @@ function openFundsDialog(clientId) {
   // dialog may already be open; showModal() throws if it is.
   const dlg = $('#dlg-funds');
   if (!dlg.open) dlg.showModal();
+}
+
+// ---------------------------------------------------------------------
+// Providers: the vendors members choose from
+// ---------------------------------------------------------------------
+
+function renderProviders() {
+  const rows = state.providers;
+  if (!rows.length) {
+    $('#providers-body').innerHTML =
+      '<tr><td colspan="7" class="empty">No providers yet. Click "Add provider" to create the first one.</td></tr>';
+    return;
+  }
+  $('#providers-body').innerHTML = rows.map((p) => {
+    const cost = p.cost_varies ? 'Varies'
+      : (p.session_cost ? fmtAmount('funding', p.session_cost) : 'Not set');
+    const where = p.in_home ? "In the member's home" : (p.address || '');
+    return `
+      <tr data-id="${esc(p.id)}">
+        <td><strong>${esc(p.name)}</strong>${p.languages ? `<div class="sub">${esc(p.languages)}</div>` : ''}</td>
+        <td><span class="pill service ${esc(p.service_type)}">${esc(SERVICE_SHORT[p.service_type] || p.service_type)}</span></td>
+        <td class="num">${esc(cost)}</td>
+        <td>${esc(p.contact_phone || '')}${p.contact_name ? `<div class="sub">${esc(p.contact_name)}</div>` : ''}</td>
+        <td class="small">${esc(where)}</td>
+        <td>${p.active ? '<span class="pill fulfilled">Yes</span>' : '<span class="pill denied">Hidden</span>'}</td>
+        <td style="text-align:right"><button class="btn sm ghost" data-provider-edit>Edit</button></td>
+      </tr>`;
+  }).join('');
+  $$('#providers-body tr[data-id]').forEach((tr) => {
+    $('[data-provider-edit]', tr)?.addEventListener('click',
+      () => openProviderForm(providerById(tr.dataset.id)));
+  });
+}
+
+let editingProviderId = null;
+function openProviderForm(p = null) {
+  const form = $('#form-provider');
+  form.reset();
+  formError(form, '');
+  editingProviderId = p?.id || null;
+  $('#provider-form-title').textContent = p ? 'Edit provider' : 'Add provider';
+  if (p) {
+    form.name.value = p.name;
+    form.service_type.value = p.service_type;
+    form.session_cost.value = p.session_cost ?? '';
+    form.cost_varies.checked = p.cost_varies;
+    form.contact_name.value = p.contact_name || '';
+    form.contact_phone.value = p.contact_phone || '';
+    form.address.value = p.address || '';
+    form.languages.value = p.languages || '';
+    form.in_home.checked = p.in_home;
+    form.notes.value = p.notes || '';
+    form.sort_order.value = p.sort_order;
+    form.active.checked = p.active;
+  }
+  $('#dlg-provider').showModal();
+}
+
+async function saveProvider(e) {
+  e.preventDefault();
+  const form = e.target;
+  await withBusy($('button[type="submit"]', form), async () => {
+    const costVaries = form.cost_varies.checked;
+    const row = {
+      name: form.name.value.trim(),
+      service_type: form.service_type.value,
+      session_cost: costVaries ? null : (Number(form.session_cost.value) || null),
+      cost_varies: costVaries,
+      contact_name: form.contact_name.value.trim() || null,
+      contact_phone: form.contact_phone.value.trim() || null,
+      address: form.address.value.trim() || null,
+      languages: form.languages.value.trim() || null,
+      in_home: form.in_home.checked,
+      notes: form.notes.value.trim() || null,
+      sort_order: Number(form.sort_order.value) || 100,
+      active: form.active.checked,
+    };
+    if (!row.name) return formError(form, 'Name is required.');
+    if (!costVaries && !row.session_cost) {
+      return formError(form, 'Enter a cost, or tick "Cost varies".');
+    }
+    const q = editingProviderId
+      ? supabase.from('providers').update(row).eq('id', editingProviderId)
+      : supabase.from('providers').insert(row);
+    const { error } = await q;
+    if (error) return formError(form, errMsg(error));
+    $('#dlg-provider').close();
+    await loadAll();
+    toast(editingProviderId ? 'Provider updated.' : 'Provider added.');
+  });
 }
 
 function openLinkDialog(clientId, justCreated = false) {
@@ -1007,7 +1166,10 @@ async function saveTransaction(e) {
 
 const TABLE_LABELS = {
   staff: 'staff access', clients: 'client', resources: 'resource',
-  service_requests: 'service request', resource_transactions: 'resource history',
+  service_requests: 'service request',
+  providers: 'provider',
+  client_allocations: 'allocation',
+  app_settings: 'setting', resource_transactions: 'resource history',
 };
 const FIELD_LABELS = {
   status: 'status', needed_at: 'needed', return_at: 'return time', return_trip: 'return trip',
@@ -1025,6 +1187,11 @@ function fmtValue(key, v) {
   if (key === 'status') return STATUSES[v] || v;
   if (key === 'reason_category') return REASONS[v] || v;
   if (key === 'service_type') return SERVICE_TYPES[v] || v;
+  if (key === 'member_group') return MEMBER_GROUPS[v] || v;
+  if (key === 'gift_card_store') return GIFT_CARD_STORES[v] || v;
+  if (key === 'gift_card_format') return GIFT_CARD_FORMATS[v] || v;
+  if (key === 'gift_card_delivery') return GIFT_CARD_DELIVERY[v] || v;
+  if (key === 'child_care_type') return CHILD_CARE_TYPES[v] || v;
   if (/_at$/.test(key)) return fmtDateTime(v);
   return String(v).length > 60 ? `${String(v).slice(0, 60)}…` : String(v);
 }
@@ -1044,6 +1211,12 @@ function subjectOf(row) {
       return `${r?.name || 'resource'} ${Number(d.amount) > 0 ? '+' : ''}${fmtAmount(r?.kind, d.amount)} (${d.description})`;
     }
     case 'staff': return d.email;
+    case 'providers': return d.name;
+    case 'app_settings': return d.key === 'default_allocation' ? 'default allocation' : d.key;
+    case 'client_allocations': {
+      const c = clientById(d.client_id);
+      return `${fmtAmount('funding', d.amount)} for ${c ? clientName(c) : 'a member'}`;
+    }
     default: return '';
   }
 }

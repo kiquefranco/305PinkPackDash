@@ -78,6 +78,16 @@ where not exists (select 1 from public.client_allocations a where a.client_id = 
 --    Spent counts dollars only: a voucher is a unit of stock, not money,
 --    so a voucher charge must never reduce a member's dollar balance.
 -- ---------------------------------------------------------------------
+-- Later migrations add columns to this view. Creating it again would
+-- silently strip them, so skip it when a newer version is already here.
+do $$
+begin
+  if exists (select 1 from information_schema.columns
+             where table_schema = 'public' and table_name = 'client_balances'
+               and column_name = 'committed') then
+    raise notice 'client_balances already has the newer shape; leaving it alone.';
+  else
+    execute $view$
 create or replace view public.client_balances
 with (security_invoker = true) as
 select
@@ -99,6 +109,9 @@ left join (
   where t.amount < 0 and res.kind = 'funding'
   group by r.client_id
 ) s on s.client_id = c.id;
+    $view$;
+  end if;
+end $$;
 
 -- ---------------------------------------------------------------------
 -- 5. Housekeeping: timestamps, audit, security

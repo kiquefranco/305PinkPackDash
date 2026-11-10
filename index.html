@@ -64,6 +64,7 @@
     <nav class="tabs" role="tablist">
       <button class="tab" role="tab" data-tab="requests" aria-selected="true">Requests<span class="count" id="tab-count-new" hidden></span></button>
       <button class="tab" role="tab" data-tab="clients" aria-selected="false">Clients</button>
+      <button class="tab" role="tab" data-tab="providers" aria-selected="false">Providers</button>
       <button class="tab" role="tab" data-tab="resources" aria-selected="false">Resources</button>
       <button class="tab" role="tab" data-tab="activity" aria-selected="false">Activity log</button>
       <button class="tab" role="tab" data-tab="staff" aria-selected="false" id="tab-staff" hidden>Staff access</button>
@@ -100,8 +101,25 @@
         </div>
         <div class="card table-wrap" style="margin-top:12px">
           <table>
-            <thead><tr><th>Name</th><th>Contact</th><th>Status</th><th>Balance</th><th>Requests</th><th>Request link</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>Contact</th><th>Membership</th><th>Available</th><th>Requests</th><th>Request link</th><th></th></tr></thead>
             <tbody id="clients-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Providers -->
+      <section data-panel="providers" hidden>
+        <div class="section-head">
+          <div>
+            <h2>Providers</h2>
+            <p>The vendors members can choose from. Self-care vendors appear on the member's page with their price and contact details, and members book them directly.</p>
+          </div>
+          <button class="btn primary" data-action="new-provider">Add provider</button>
+        </div>
+        <div class="card table-wrap" style="margin-top:12px">
+          <table>
+            <thead><tr><th>Name</th><th>Service</th><th>Cost</th><th>Contact</th><th>Where</th><th>Shown to members</th><th></th></tr></thead>
+            <tbody id="providers-body"></tbody>
           </table>
         </div>
       </section>
@@ -191,6 +209,19 @@
         </div>
         <label class="field">Email <span class="hint">Where their request link is sent</span><input name="email" type="email" maxlength="200" /></label>
         <label class="field">Phone<input name="phone" type="tel" maxlength="30" /></label>
+        <div class="form-grid two">
+          <label class="field">Member since <span class="hint">When they joined Pink Pack, not today</span>
+            <input name="member_since" type="date" /></label>
+          <label class="field">Group
+            <select name="member_group">
+              <option value="">Not set</option>
+              <option value="early_stage">Early Stage Group</option>
+              <option value="thriver">Thriver Group</option>
+            </select></label>
+        </div>
+        <label class="check"><input type="checkbox" name="no_expiry" /> Direct services do not expire</label>
+        <label class="field" id="expiry-field">Direct services available until
+          <input name="services_expire_on" type="date" /></label>
         <label class="check"><input type="checkbox" name="in_treatment" checked /> In treatment</label>
         <p class="form-error" hidden></p>
         <div class="form-actions"><button type="button" class="btn" data-close>Cancel</button><button class="btn primary" type="submit">Save</button></div>
@@ -234,6 +265,42 @@
         </div>
         <label class="field">Date<input name="occurred_on" type="date" required /></label>
         <label class="field">Description<input name="description" required maxlength="200" placeholder="e.g. Grant from Miami Foundation" /></label>
+        <p class="form-error" hidden></p>
+        <div class="form-actions"><button type="button" class="btn" data-close>Cancel</button><button class="btn primary" type="submit">Save</button></div>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Provider form -->
+  <dialog id="dlg-provider">
+    <form method="dialog" id="form-provider">
+      <div class="dialog-head"><h2 id="provider-form-title">Add provider</h2><button type="button" class="btn ghost sm" data-close>Close</button></div>
+      <div class="dialog-body">
+        <div class="form-grid two">
+          <label class="field">Name<input name="name" required maxlength="200" /></label>
+          <label class="field">Service
+            <select name="service_type">
+              <option value="self_care">Self-care service</option>
+              <option value="ride">Ride</option>
+              <option value="gift_card">Grocery gift card</option>
+              <option value="child_care">Child care</option>
+            </select></label>
+        </div>
+        <div class="form-grid two">
+          <label class="field">Cost per session ($)<input name="session_cost" type="number" min="0.01" step="0.01" /></label>
+          <label class="field">Order shown <span class="hint">Lower appears first</span>
+            <input name="sort_order" type="number" step="10" value="100" /></label>
+        </div>
+        <label class="check"><input type="checkbox" name="cost_varies" /> Cost varies, no fixed price</label>
+        <div class="form-grid two">
+          <label class="field">Contact name<input name="contact_name" maxlength="200" /></label>
+          <label class="field">Phone to text<input name="contact_phone" maxlength="40" /></label>
+        </div>
+        <label class="field">Address<input name="address" maxlength="300" /></label>
+        <label class="field">Languages<input name="languages" maxlength="120" placeholder="English and Spanish" /></label>
+        <label class="check"><input type="checkbox" name="in_home" /> Takes place in the member's home</label>
+        <label class="field">Notes <span class="hint">Shown to members</span><textarea name="notes" maxlength="300"></textarea></label>
+        <label class="check"><input type="checkbox" name="active" checked /> Shown to members</label>
         <p class="form-error" hidden></p>
         <div class="form-actions"><button type="button" class="btn" data-close>Cancel</button><button class="btn primary" type="submit">Save</button></div>
       </div>

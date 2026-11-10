@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex, nofollow" />
   <meta name="referrer" content="no-referrer" />
-  <title>Request a Ride · 305 Pink Pack</title>
+  <title>My 305 Pink Pack</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -15,52 +15,149 @@
   <div class="public">
     <header>
       <div class="brand-mark">305</div>
-      <div><h1>Request a ride</h1><p class="muted small">305 Pink Pack</p></div>
+      <div><h1 id="page-title">My 305 Pink Pack</h1><p class="muted small">Your support and services</p></div>
     </header>
 
-    <div id="state-loading" class="card"><p class="muted">Checking your link…</p></div>
+    <div id="state-loading" class="card"><p class="muted">Loading your page…</p></div>
 
     <div id="state-invalid" class="card" hidden>
       <h2>This link is not active</h2>
-      <p class="muted" style="margin-top:8px">Ride requests need the personal link 305 Pink Pack sent you. If you used that link and still see this message, please call us at <a class="org-phone-link"><span class="org-phone"></span></a>.</p>
+      <p class="muted" style="margin-top:8px">This page needs the personal link 305 Pink Pack sent you. If you used that link and still see this message, please call us at <a class="org-phone-link"><span class="org-phone"></span></a>.</p>
     </div>
 
+    <!-- Membership summary -->
+    <div id="state-summary" class="card" hidden>
+      <p id="greeting" class="member-greeting"></p>
+      <div class="balance-hero">
+        <div class="balance-label">Funds remaining</div>
+        <div class="balance-amount" id="balance-amount">$0.00</div>
+        <div class="meter lg"><span id="balance-meter" style="width:0%"></span></div>
+        <div class="balance-sub" id="balance-sub"></div>
+      </div>
+      <dl class="member-facts">
+        <dt>Member since</dt><dd id="fact-since"></dd>
+        <dt>Direct services available</dt><dd id="fact-expiry"></dd>
+      </dl>
+      <p class="notice" id="expired-notice" hidden></p>
+    </div>
+
+    <!-- What you can request -->
+    <div id="state-catalog" class="card" hidden>
+      <h2>What you can request</h2>
+      <div id="catalog"></div>
+    </div>
+
+    <!-- Request form -->
     <form id="state-form" class="card" hidden novalidate>
-      <div class="form-grid">
-        <p id="greeting" style="font-weight:600"></p>
-        <label class="field">Pickup date and time
-          <input name="pickup_at" type="datetime-local" required />
-        </label>
-        <label class="field">Pickup address
-          <input name="pickup_address" required maxlength="300" autocomplete="street-address" placeholder="Street, city, ZIP" />
-        </label>
-        <label class="field">Where are you going?
-          <input name="dropoff_address" required maxlength="300" placeholder="Name of place and address" />
-        </label>
-        <label class="field">Why do you need the ride?
-          <select name="reason_category" required>
+      <h2>Make a request</h2>
+      <div class="form-grid" style="margin-top:14px">
+        <label class="field">What do you need?
+          <select name="service_type" required>
             <option value="">Choose one</option>
-            <option value="treatment">Treatment appointment</option>
-            <option value="doctor_visit">Doctor visit or follow-up</option>
-            <option value="labs_scans">Lab work or scans</option>
-            <option value="pharmacy">Pharmacy pickup</option>
-            <option value="support_service">Support service or program</option>
-            <option value="other">Other</option>
+            <option value="ride">A ride</option>
+            <option value="self_care">A self-care service</option>
+            <option value="gift_card">A grocery gift card</option>
+            <option value="child_care">Child care help</option>
           </select>
         </label>
-        <label class="field">Anything else we should know? <span class="hint">Optional. Please do not include medical details.</span>
-          <textarea name="reason_details" maxlength="300" placeholder="e.g. I use a walker, or I will have one companion"></textarea>
-        </label>
-        <label class="check"><input type="checkbox" name="return_trip" /> I also need a ride home</label>
-        <label class="field" id="return-field" hidden>Pickup time for the ride home <span class="hint">Your best estimate</span>
-          <input name="return_at" type="datetime-local" />
-        </label>
-        <label class="field">Best phone number to reach you <span class="hint">Optional if we already have it</span>
-          <input name="contact_phone" type="tel" maxlength="30" autocomplete="tel" />
-        </label>
-        <p class="notice info">Your ride is not confirmed until someone from 305 Pink Pack contacts you.</p>
-        <p class="form-error" id="form-error" hidden></p>
-        <button class="btn primary lg" type="submit">Send request</button>
+
+        <!-- Ride -->
+        <div data-for="ride" hidden class="form-grid">
+          <label class="field">Pickup address
+            <input name="pickup_address" maxlength="300" autocomplete="street-address" placeholder="Street, city, ZIP" />
+          </label>
+          <label class="field">Where are you going?
+            <input name="dropoff_address" maxlength="300" placeholder="Name of place and address" />
+          </label>
+          <label class="check"><input type="checkbox" name="return_trip" /> I also need a ride home</label>
+          <label class="field" id="return-field" hidden>Pickup time for the ride home <span class="hint">Your best estimate</span>
+            <input name="return_at" type="datetime-local" />
+          </label>
+        </div>
+
+        <!-- Self care -->
+        <div data-for="self_care" hidden class="form-grid">
+          <label class="field">Which service?
+            <select name="provider_id"><option value="">Choose one</option></select>
+          </label>
+          <p class="notice info" id="self-care-note" hidden></p>
+        </div>
+
+        <!-- Gift card -->
+        <div data-for="gift_card" hidden class="form-grid">
+          <label class="field">Which store?
+            <select name="gift_card_store">
+              <option value="">Choose one</option>
+              <option value="walmart">Walmart</option>
+              <option value="publix">Publix</option>
+              <option value="aldi">Aldi</option>
+            </select>
+          </label>
+          <label class="field">Physical or electronic card?
+            <select name="gift_card_format">
+              <option value="">Choose one</option>
+              <option value="physical">Physical card</option>
+              <option value="electronic">Electronic card</option>
+            </select>
+            <span class="hint" id="aldi-hint" hidden>Aldi cards are physical only.</span>
+          </label>
+          <label class="field" id="delivery-field" hidden>How would you like to get it?
+            <select name="gift_card_delivery">
+              <option value="">Choose one</option>
+              <option value="pickup">I will pick it up at the office</option>
+              <option value="mail">Please mail it to me</option>
+            </select>
+          </label>
+          <label class="field">How much? <span class="hint">Cards usually come in $300 amounts</span>
+            <input name="gift_card_amount" type="number" min="1" step="1" placeholder="300" />
+          </label>
+        </div>
+
+        <!-- Child care -->
+        <div data-for="child_care" hidden class="form-grid">
+          <label class="field">What kind of help?
+            <select name="child_care_type">
+              <option value="">Choose one</option>
+              <option value="tuition">School tuition</option>
+              <option value="before_after_care">Before or after school care</option>
+              <option value="day_camp">Day camp</option>
+              <option value="day_care">Day care</option>
+              <option value="transportation">School transportation</option>
+            </select>
+          </label>
+          <label class="field">Who should we pay? <span class="hint">The name of the school, camp or provider</span>
+            <input name="vendor_name" maxlength="200" />
+          </label>
+          <label class="field">Their phone or email
+            <input name="vendor_contact" maxlength="200" />
+          </label>
+          <label class="field">What dates or times does this cover?
+            <input name="service_period" maxlength="300" placeholder="School pick up and drop off, 1/5/2027 to 2/5/2027" />
+          </label>
+          <label class="field">Total cost
+            <input name="child_care_amount" type="number" min="1" step="0.01" />
+          </label>
+        </div>
+
+        <!-- Shared -->
+        <div data-for="any" hidden class="form-grid">
+          <label class="field" id="when-field">When do you need this?
+            <input name="needed_at" type="datetime-local" />
+          </label>
+          <label class="field">Why do you need it?
+            <select name="reason_category"><option value="">Choose one</option></select>
+          </label>
+          <label class="field">Anything else we should know? <span class="hint">Optional. Please do not include medical details.</span>
+            <textarea name="reason_details" maxlength="300"></textarea>
+          </label>
+          <label class="field">Best phone number to reach you <span class="hint">Optional if we already have it</span>
+            <input name="contact_phone" type="tel" maxlength="30" autocomplete="tel" />
+          </label>
+          <p class="notice info" id="cost-note" hidden></p>
+          <p class="notice">Nothing is confirmed until someone from 305 Pink Pack contacts you.</p>
+          <p class="form-error" id="form-error" hidden></p>
+          <button class="btn primary lg" type="submit">Send request</button>
+        </div>
       </div>
     </form>
 
@@ -68,8 +165,8 @@
       <div class="success-mark">✓</div>
       <h2>Request received</h2>
       <p class="muted" id="done-summary"></p>
-      <p class="muted">We will contact you to confirm the ride. If your plans change, call us at <a class="org-phone-link"><span class="org-phone"></span></a>.</p>
-      <div><button class="btn" id="btn-another">Request another ride</button></div>
+      <p class="muted" id="done-next"></p>
+      <div><button class="btn" id="btn-another">Make another request</button></div>
     </div>
 
     <p class="foot">In a medical emergency, call 911.</p>

@@ -44,6 +44,37 @@ export const REASONS_BY_SERVICE = {
   child_care: ['child_care', 'treatment', 'doctor_visit', 'other'],
 };
 
+export const MEMBER_GROUPS = {
+  early_stage: 'Early Stage Group',
+  thriver: 'Thriver Group',
+};
+
+export const GIFT_CARD_STORES = {
+  walmart: 'Walmart',
+  publix: 'Publix',
+  aldi: 'Aldi',
+};
+
+// Aldi only issues physical cards.
+export const GIFT_CARD_FORMATS = {
+  physical: 'Physical card',
+  electronic: 'Electronic card',
+};
+export const storeAllowsElectronic = (store) => store !== 'aldi';
+
+export const GIFT_CARD_DELIVERY = {
+  pickup: 'Pick up at the office',
+  mail: 'Mail it to me',
+};
+
+export const CHILD_CARE_TYPES = {
+  tuition: 'School tuition',
+  before_after_care: 'Before or after school care',
+  day_camp: 'Day camp',
+  day_care: 'Day care',
+  transportation: 'School transportation',
+};
+
 // Rides are the only service that involves travel.
 export const usesAddresses = (serviceType) => serviceType === 'ride';
 

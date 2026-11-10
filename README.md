@@ -10,7 +10,8 @@ Built by the Hyperion Council team, Fall 2026.
 |---|---|
 | **Requests** | New requests appear on the dashboard live. Each one is tagged with its service and moves through Submitted, In review, Approved or Denied, and Fulfilled. Filter by service with the chips above the table. |
 | **Booking** | When a request is approved, staff record the provider, the confirmation number, and what it cost. The cost comes out of a funding pool or the voucher stock automatically. |
-| **Clients** | Staff add a client and send them a personal request link. Only people with a link can submit. Links can be turned off or replaced at any time. |
+| **Clients** | Staff add a member, set their join date, group and whether their services expire, and send them a personal link. Only people with a link can submit. Links can be turned off or replaced at any time. |
+| **Providers** | The vendors members can use. Self-care vendors show on the member's page with price and contact details; members book those themselves. |
 | **Member funding** | Each member gets their own allocation ($2,000 by default, editable by an admin). Every funded service draws it down, and the clients table shows what is left. Booking is refused if a charge would take a member past their balance. |
 | **Resources** | Balances for funding and vouchers, with a full history of every addition and use. |
 | **Activity log** | Every change, who made it, and when. |
@@ -38,7 +39,7 @@ The free Supabase plan includes a 500 MB database and 50,000 monthly active user
 
 ```
 index.html                     Staff dashboard
-request.html                   Client ride request form (opened from a private link; rides only)
+request.html                   The member's own page (opened from their private link)
 assets/css/styles.css          Styles for both pages
 assets/js/config.js            Supabase URL and key, org name and phone  <- edit this
 assets/js/shared.js            Supabase connection and shared helpers
@@ -134,6 +135,23 @@ GitHub Pages is free only for public repositories. A private repository with Pag
 
 **Complete:** After the service is delivered, click **Mark fulfilled**.
 
+### The member's page
+
+Each member's private link opens a page showing when they joined, whether their direct services have an end date, how much funding they have left, and everything they can spend it on. From there they can request a ride, a self-care service, a grocery gift card, or child care help.
+
+Two rules are enforced on the server, not just in the browser:
+
+- A member cannot request more than they have available. Requests already waiting for review are held against the balance, so four small requests cannot quietly add up to more than their allocation.
+- Self-care prices come from the provider directory, never from the member's browser.
+
+Self-care works differently from the rest. The member contacts the vendor themselves to book, and the session cost comes off their balance. Nothing needs arranging on Pink Pack's end, so these requests are a record and a deduction rather than a job.
+
+### Providers
+
+Providers > **Add provider** to add a vendor. Name, service, cost per session, and a phone number to text are what members see. Tick **Cost varies** for anything without a fixed price, and untick **Shown to members** to hide a vendor without deleting the history attached to it.
+
+The four self-care vendors Rosemary uses are created by migration `003`, with their prices and contact details. Edit them like any other provider; re-running the migration will not overwrite your changes.
+
 ### Member funding
 
 Every member added to the dashboard automatically receives the default allocation, shown in the Balance column on the Clients tab. Click **Funds** on a member's row to see what they were given, what they have spent and on what, and to add money or correct a mistake.
@@ -172,8 +190,9 @@ Renaming or reshaping something that already holds data is different: `schema.sq
 |---|---|---|
 | `001_services.sql` | Turns ride requests into service requests covering rides, self-care, gift cards and child care | Your database was created before October 2026 and still has a `ride_requests` table |
 | `002_client_balances.sql` | Gives each member their own funding balance and blocks bookings that would exceed it | Your database has no `client_allocations` table. Run `001` first. |
+| `003_members_and_providers.sql` | Adds join date, group and expiration; the provider directory with Rosemary's vendors; and the fields each service needs | Your database has no `providers` table. Run `001` and `002` first. |
 
-Migrations are safe to re-run. After running `001`, the client request form must be on the matching version of the code, since the function it calls was renamed.
+Migrations are safe to re-run, but run them in order and do not go back to an older one after a newer one. After running `001` or `003`, the member page must be on the matching version of the code, since the function it calls changed.
 
 ## Limits to know
 
