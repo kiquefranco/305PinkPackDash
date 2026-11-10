@@ -100,7 +100,7 @@
         </div>
         <div class="card table-wrap" style="margin-top:12px">
           <table>
-            <thead><tr><th>Name</th><th>Contact</th><th>Status</th><th>Requests</th><th>Request link</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>Contact</th><th>Status</th><th>Balance</th><th>Requests</th><th>Request link</th><th></th></tr></thead>
             <tbody id="clients-body"></tbody>
           </table>
         </div>
@@ -153,6 +153,21 @@
             <thead><tr><th>Name</th><th>Google email</th><th>Role</th><th>Added</th><th></th></tr></thead>
             <tbody id="staff-body"></tbody>
           </table>
+        </div>
+
+        <div class="section-head" style="margin-top:28px">
+          <div>
+            <h2>Member funding</h2>
+            <p>What each new member is given when they are added. Changing it does not affect members who are already in the system; adjust those on the member's Funds screen.</p>
+          </div>
+        </div>
+        <div class="card" style="margin-top:12px; padding:16px">
+          <div class="form-grid two">
+            <label class="field">Default allocation per member ($)
+              <input id="setting-default-allocation" type="number" min="0" step="0.01" /></label>
+          </div>
+          <p class="form-error" id="setting-error" hidden></p>
+          <div class="toolbar"><button class="btn primary" id="setting-save">Save</button></div>
         </div>
       </section>
     </main>
@@ -223,6 +238,13 @@
         <div class="form-actions"><button type="button" class="btn" data-close>Cancel</button><button class="btn primary" type="submit">Save</button></div>
       </div>
     </form>
+  </dialog>
+
+  <!-- Member funding -->
+  <dialog id="dlg-funds" class="sheet">
+    <div class="dialog-head"><h2 id="funds-title">Funding</h2>
+      <button class="icon-btn" data-close aria-label="Close">&times;</button></div>
+    <div class="dialog-body" id="funds-body"></div>
   </dialog>
 
   <!-- Staff form -->

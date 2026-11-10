@@ -32,6 +32,28 @@ create table if not exists public.clients (
   updated_at          timestamptz not null default now()
 );
 
+-- Settings an admin can change without editing code.
+create table if not exists public.app_settings (
+  key         text primary key,
+  value       text not null,
+  description text,
+  updated_at  timestamptz not null default now()
+);
+
+-- Money set aside for one member. One row per grant, so a top-up or a
+-- renewal is another row and the history stays readable.
+create table if not exists public.client_allocations (
+  id          uuid primary key default gen_random_uuid(),
+  client_id   uuid not null references public.clients(id) on delete cascade,
+  amount      numeric(12,2) not null check (amount <> 0),
+  note        text,
+  granted_on  date not null default current_date,
+  created_by  text,
+  created_at  timestamptz not null default now()
+);
+create index if not exists client_allocations_client_idx
+  on public.client_allocations(client_id);
+
 -- Funding pools and voucher stock.
 create table if not exists public.resources (
   id          uuid primary key default gen_random_uuid(),
@@ -91,6 +113,11 @@ create table if not exists public.resource_transactions (
   created_at       timestamptz not null default now()
 );
 create index if not exists resource_tx_resource_idx on public.resource_transactions(resource_id);
+
+insert into public.app_settings(key, value, description)
+values ('default_allocation', '2000',
+        'Dollars granted to each new member automatically. Changing this affects new members only.')
+on conflict (key) do nothing;
 
 -- Audit trail. Written only by triggers.
 create table if not exists public.audit_log (
@@ -169,6 +196,21 @@ begin
   return new;
 end $$;
 
+-- Gives each new member the default allocation automatically.
+create or replace function public.grant_default_allocation()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare v_default numeric;
+begin
+  select nullif(value, '')::numeric into v_default
+  from public.app_settings where key = 'default_allocation';
+  if coalesce(v_default, 0) > 0 then
+    insert into public.client_allocations(client_id, amount, note, created_by)
+    values (new.id, v_default, 'Starting allocation',
+            coalesce(nullif(public.current_email(), ''), 'system'));
+  end if;
+  return new;
+end $$;
+
 -- Stamps who recorded a transaction.
 create or replace function public.stamp_created_by()
 returns trigger language plpgsql as $$
@@ -197,6 +239,18 @@ drop trigger if exists normalize_staff_email on public.staff;
 create trigger normalize_staff_email before insert or update on public.staff
   for each row execute function public.normalize_staff_email();
 
+drop trigger if exists touch_app_settings on public.app_settings;
+create trigger touch_app_settings before update on public.app_settings
+  for each row execute function public.touch_updated_at();
+
+drop trigger if exists grant_default_allocation on public.clients;
+create trigger grant_default_allocation after insert on public.clients
+  for each row execute function public.grant_default_allocation();
+
+drop trigger if exists stamp_client_allocations on public.client_allocations;
+create trigger stamp_client_allocations before insert on public.client_allocations
+  for each row execute function public.stamp_created_by();
+
 drop trigger if exists stamp_resource_tx on public.resource_transactions;
 create trigger stamp_resource_tx before insert on public.resource_transactions
   for each row execute function public.stamp_created_by();
@@ -204,7 +258,8 @@ create trigger stamp_resource_tx before insert on public.resource_transactions
 do $$
 declare t text;
 begin
-  foreach t in array array['staff', 'clients', 'resources', 'service_requests', 'resource_transactions'] loop
+  foreach t in array array['staff', 'clients', 'resources', 'service_requests',
+                           'resource_transactions', 'client_allocations', 'app_settings'] loop
     execute format('drop trigger if exists audit_%1$s on public.%1$I', t);
     execute format('create trigger audit_%1$s after insert or update or delete on public.%1$I
                     for each row execute function public.write_audit()', t);
@@ -225,6 +280,31 @@ from public.resources r
 left join public.resource_transactions t on t.resource_id = r.id
 group by r.id;
 
+-- What each member has been given, has spent, and has left.
+-- Spent counts dollars only: a voucher is a unit of stock, not money,
+-- so a voucher charge must never reduce a member's dollar balance.
+create or replace view public.client_balances
+with (security_invoker = true) as
+select
+  c.id as client_id,
+  coalesce(a.allocated, 0)::numeric(12,2) as allocated,
+  coalesce(s.spent, 0)::numeric(12,2)     as spent,
+  (coalesce(a.allocated, 0) - coalesce(s.spent, 0))::numeric(12,2) as remaining,
+  a.last_granted_on
+from public.clients c
+left join (
+  select client_id, sum(amount) as allocated, max(granted_on) as last_granted_on
+  from public.client_allocations group by client_id
+) a on a.client_id = c.id
+left join (
+  select r.client_id, sum(abs(t.amount)) as spent
+  from public.resource_transactions t
+  join public.service_requests r on r.id = t.service_request_id
+  join public.resources res      on res.id = t.resource_id
+  where t.amount < 0 and res.kind = 'funding'
+  group by r.client_id
+) s on s.client_id = c.id;
+
 -- ---------------------------------------------------------------------
 -- 5. Row level security
 -- Anonymous visitors can read and write nothing directly.
@@ -237,15 +317,21 @@ alter table public.clients               enable row level security;
 alter table public.resources             enable row level security;
 alter table public.service_requests         enable row level security;
 alter table public.resource_transactions enable row level security;
+alter table public.client_allocations    enable row level security;
+alter table public.app_settings          enable row level security;
 alter table public.audit_log             enable row level security;
 
 revoke all on public.staff, public.clients, public.resources, public.service_requests,
-              public.resource_transactions, public.audit_log, public.resource_balances
+              public.resource_transactions, public.client_allocations, public.app_settings,
+              public.audit_log, public.resource_balances, public.client_balances
   from anon;
 
 grant select, insert, update, delete on public.staff, public.clients, public.resources,
-      public.service_requests, public.resource_transactions to authenticated;
-grant select on public.audit_log, public.resource_balances to authenticated;
+      public.service_requests, public.resource_transactions, public.client_allocations
+  to authenticated;
+grant select on public.audit_log, public.resource_balances, public.client_balances,
+      public.app_settings to authenticated;
+grant update on public.app_settings to authenticated;
 
 drop policy if exists staff_read on public.staff;
 create policy staff_read on public.staff for select to authenticated using (public.is_staff());
@@ -256,12 +342,21 @@ create policy staff_admin_write on public.staff for all to authenticated
 do $$
 declare t text;
 begin
-  foreach t in array array['clients', 'resources', 'service_requests', 'resource_transactions'] loop
+  foreach t in array array['clients', 'resources', 'service_requests',
+                           'resource_transactions', 'client_allocations'] loop
     execute format('drop policy if exists %1$s_staff_all on public.%1$I', t);
     execute format('create policy %1$s_staff_all on public.%1$I for all to authenticated
                     using (public.is_staff()) with check (public.is_staff())', t);
   end loop;
 end $$;
+
+-- Any staff member can read settings; only an admin can change them.
+drop policy if exists app_settings_staff_read on public.app_settings;
+create policy app_settings_staff_read on public.app_settings for select to authenticated
+  using (public.is_staff());
+drop policy if exists app_settings_admin_write on public.app_settings;
+create policy app_settings_admin_write on public.app_settings for update to authenticated
+  using (public.is_admin()) with check (public.is_admin());
 
 drop policy if exists audit_staff_read on public.audit_log;
 create policy audit_staff_read on public.audit_log for select to authenticated using (public.is_staff());
@@ -391,21 +486,51 @@ create or replace function public.fulfill_request(
 ) returns void
 language plpgsql security invoker set search_path = public as $$
 declare
-  v_status text;
-  v_type   text;
-  v_name   text;
-  v_label  text;
+  v_status    text;
+  v_type      text;
+  v_name      text;
+  v_label     text;
+  v_client    uuid;
+  v_kind      text;
+  v_remaining numeric;
+  v_prior     numeric;
 begin
   if not public.is_staff() then
     raise exception 'Not authorized.';
   end if;
-  select r.status, r.service_type, trim(c.first_name || ' ' || c.last_name)
-    into v_status, v_type, v_name
+
+  select r.status, r.service_type, r.client_id, trim(c.first_name || ' ' || c.last_name)
+    into v_status, v_type, v_client, v_name
   from public.service_requests r join public.clients c on c.id = r.client_id
   where r.id = p_request_id;
   if v_status is null then raise exception 'Request not found.'; end if;
   if v_status not in ('approved', 'fulfilled') then
     raise exception 'Approve the request before booking it.';
+  end if;
+
+  -- Check the member's balance before anything is written.
+  if p_resource_id is not null and coalesce(p_amount_used, 0) > 0 then
+    select kind into v_kind from public.resources where id = p_resource_id;
+    if v_kind = 'funding' then
+      select remaining into v_remaining from public.client_balances where client_id = v_client;
+
+      -- Re-booking replaces the earlier charge, so that charge is not
+      -- competing with the new one. Add it back before comparing.
+      select coalesce(abs(t.amount), 0) into v_prior
+      from public.resource_transactions t
+      join public.resources res on res.id = t.resource_id
+      where t.service_request_id = p_request_id and res.kind = 'funding';
+
+      v_remaining := coalesce(v_remaining, 0) + coalesce(v_prior, 0);
+
+      if p_amount_used > v_remaining then
+        raise exception
+          '% has % left. This charge of % would go over their balance.',
+          v_name,
+          to_char(v_remaining, 'FM$999,999,990.00'),
+          to_char(p_amount_used, 'FM$999,999,990.00');
+      end if;
+    end if;
   end if;
 
   update public.service_requests
@@ -447,7 +572,8 @@ grant execute on function public.is_staff(), public.is_admin(), public.current_e
 do $$
 declare t text;
 begin
-  foreach t in array array['clients', 'resources', 'service_requests', 'resource_transactions', 'staff'] loop
+  foreach t in array array['clients', 'resources', 'service_requests', 'resource_transactions',
+                           'staff', 'client_allocations', 'app_settings'] loop
     begin
       execute format('alter publication supabase_realtime add table public.%I', t);
     exception when duplicate_object then null;

@@ -16,6 +16,9 @@ const state = {
   requests: [],
   resources: [],
   transactions: [],
+  balances: [],
+  allocations: [],
+  settings: {},
   audit: [],
   staff: [],
   filter: 'open',
@@ -47,6 +50,8 @@ const clientById = (id) => state.clients.find((c) => c.id === id);
 const resourceById = (id) => state.resources.find((r) => r.id === id);
 const clientName = (c) => (c ? `${c.first_name} ${c.last_name || ''}`.trim() : 'Unknown client');
 const serviceLabel = (r) => SERVICE_TYPES[r.service_type] || r.service_type;
+const balanceFor = (clientId) => state.balances.find((b) => b.client_id === clientId)
+  || { allocated: 0, spent: 0, remaining: 0 };
 const whenLabel = (r) => NEEDED_AT_LABEL[r.service_type] || 'Needed';
 
 // ---------------------------------------------------------------------
@@ -119,22 +124,30 @@ async function enter(session) {
 // ---------------------------------------------------------------------
 
 async function loadAll() {
-  const [clients, requests, resources, transactions, audit, staff] = await Promise.all([
-    supabase.from('clients').select('*').order('first_name'),
-    supabase.from('service_requests').select('*').order('needed_at', { ascending: true }).limit(2000),
-    supabase.from('resource_balances').select('*').order('name'),
-    supabase.from('resource_transactions').select('*')
-      .order('occurred_on', { ascending: false }).order('created_at', { ascending: false }).limit(500),
-    supabase.from('audit_log').select('*').order('changed_at', { ascending: false }).limit(300),
-    supabase.from('staff').select('*').order('created_at'),
-  ]);
-  const failed = [clients, requests, resources, transactions, audit, staff].find((r) => r.error);
+  const [clients, requests, resources, transactions, balances, allocations, settings, audit, staff] =
+    await Promise.all([
+      supabase.from('clients').select('*').order('first_name'),
+      supabase.from('service_requests').select('*').order('needed_at', { ascending: true }).limit(2000),
+      supabase.from('resource_balances').select('*').order('name'),
+      supabase.from('resource_transactions').select('*')
+        .order('occurred_on', { ascending: false }).order('created_at', { ascending: false }).limit(500),
+      supabase.from('client_balances').select('*'),
+      supabase.from('client_allocations').select('*').order('granted_on', { ascending: false }),
+      supabase.from('app_settings').select('*'),
+      supabase.from('audit_log').select('*').order('changed_at', { ascending: false }).limit(300),
+      supabase.from('staff').select('*').order('created_at'),
+    ]);
+  const failed = [clients, requests, resources, transactions, balances, allocations, settings, audit, staff]
+    .find((r) => r.error);
   if (failed) toast(`Could not load data: ${errMsg(failed.error)}`, 'error');
 
   state.clients = clients.data || [];
   state.requests = requests.data || [];
   state.resources = resources.data || [];
   state.transactions = transactions.data || [];
+  state.balances = balances.data || [];
+  state.allocations = allocations.data || [];
+  state.settings = Object.fromEntries((settings.data || []).map((r) => [r.key, r.value]));
   state.audit = audit.data || [];
   state.staff = staff.data || [];
   renderAll();
@@ -382,6 +395,7 @@ function renderRequestDrawer(id) {
   const c = clientById(r.client_id);
   const charge = state.transactions.find((t) => t.service_request_id === r.id);
   const isRide = usesAddresses(r.service_type);
+  const bal = balanceFor(r.client_id);
   const activeResources = state.resources.filter((x) => x.active || x.id === charge?.resource_id);
 
   $('#req-title').textContent = `${serviceLabel(r)} for ${clientName(c)}`;
@@ -441,6 +455,10 @@ function renderRequestDrawer(id) {
             <input id="bk-confirmation" value="${esc(r.confirmation_code || '')}" /></label>
         </div>
         <datalist id="providers">${(PROVIDER_SUGGESTIONS[r.service_type] || []).map((x) => `<option>${esc(x)}</option>`).join('')}</datalist>
+        <p class="notice info" style="margin-top:4px">
+          ${esc(clientName(c))} has <strong>${esc(fmtAmount('funding', bal.remaining))}</strong> left
+          of ${esc(fmtAmount('funding', bal.allocated))}.
+        </p>
         <div class="form-grid two">
           <label class="field">Paid with
             <select id="bk-resource">
@@ -515,9 +533,24 @@ function renderRequestDrawer(id) {
       $('#bk-amount').step = res?.kind === 'voucher' ? '1' : '0.01';
       const amt = Number($('#bk-amount').value || 0);
       const already = charge && res && charge.resource_id === res.id ? Math.abs(charge.amount) : 0;
-      const warn = res && amt > Number(res.balance) + already;
-      $('#bk-warning').hidden = !warn;
-      if (warn) $('#bk-warning').textContent = `${res.name} only has ${fmtAmount(res.kind, Number(res.balance) + already)} available. You can still save, but the balance will go negative.`;
+
+      // The member's own balance is a hard limit; the pool is a warning.
+      const priorOnThis = charge && resourceById(charge.resource_id)?.kind === 'funding'
+        ? Math.abs(charge.amount) : 0;
+      const memberLeft = Number(bal.remaining) + priorOnThis;
+      const overMember = res?.kind === 'funding' && amt > memberLeft;
+      const overPool = res && amt > Number(res.balance) + already;
+
+      const w = $('#bk-warning');
+      w.hidden = !(overMember || overPool);
+      w.classList.toggle('error', overMember);
+      if (overMember) {
+        w.textContent = `${clientName(c)} only has ${fmtAmount('funding', memberLeft)} left. `
+          + 'Saving will be refused. Add funds on their Funds screen first, or lower the amount.';
+      } else if (overPool) {
+        w.textContent = `${res.name} only has ${fmtAmount(res.kind, Number(res.balance) + already)} available. `
+          + 'You can still save, but the pool balance will go negative.';
+      }
     };
     $('#bk-resource').addEventListener('change', syncBooking);
     $('#bk-amount').addEventListener('input', syncBooking);
@@ -630,27 +663,37 @@ function renderClients() {
     || [clientName(c), c.email, c.phone].join(' ').toLowerCase().includes(state.clientSearch));
 
   if (!rows.length) {
-    $('#clients-body').innerHTML = `<tr><td colspan="6" class="empty">${state.clients.length ? 'No clients match.' : 'No clients yet. Click "Add client" to create the first one.'}</td></tr>`;
+    $('#clients-body').innerHTML = `<tr><td colspan="7" class="empty">${state.clients.length ? 'No clients match.' : 'No clients yet. Click "Add client" to create the first one.'}</td></tr>`;
     return;
   }
   $('#clients-body').innerHTML = rows.map((c) => {
     const reqs = state.requests.filter((r) => r.client_id === c.id);
     const done = reqs.filter((r) => r.status === 'fulfilled').length;
+    const b = balanceFor(c.id);
+    const pct = b.allocated > 0 ? Math.max(0, Math.min(100, (b.remaining / b.allocated) * 100)) : 0;
+    const low = b.allocated > 0 && pct <= 15;
     return `
       <tr data-id="${esc(c.id)}">
         <td><strong>${esc(clientName(c))}</strong><div class="sub">Added ${esc(fmtDate(c.created_at))}</div></td>
         <td>${esc(c.email || '')}<div class="sub">${esc(c.phone || '')}</div></td>
         <td>${c.in_treatment ? '<span class="pill neutral">In treatment</span>' : '<span class="muted small">Not in treatment</span>'}</td>
+        <td class="num">
+          <strong${low ? ' style="color:var(--red)"' : ''}>${esc(fmtAmount('funding', b.remaining))}</strong>
+          <div class="sub">of ${esc(fmtAmount('funding', b.allocated))}</div>
+          <div class="meter${low ? ' low' : ''}"><span style="width:${pct.toFixed(1)}%"></span></div>
+        </td>
         <td class="num">${reqs.length}<div class="sub">${done} fulfilled</div></td>
         <td>${c.request_link_active ? '<span class="pill fulfilled">Active</span>' : '<span class="pill denied">Off</span>'}</td>
         <td class="nowrap" style="text-align:right">
-          <button class="btn sm" data-client-link>Link</button>
+          <button class="btn sm" data-client-funds>Funds</button>
+          <button class="btn sm ghost" data-client-link>Link</button>
           <button class="btn sm ghost" data-client-edit>Edit</button>
         </td>
       </tr>`;
   }).join('');
   $$('#clients-body tr[data-id]').forEach((tr) => {
     const c = clientById(tr.dataset.id);
+    $('[data-client-funds]', tr)?.addEventListener('click', () => openFundsDialog(c.id));
     $('[data-client-link]', tr)?.addEventListener('click', () => openLinkDialog(c.id));
     $('[data-client-edit]', tr)?.addEventListener('click', () => openClientForm(c));
   });
@@ -696,6 +739,106 @@ async function saveClient(e) {
     if (!editingClientId) openLinkDialog(data.id, true);
     else toast('Client updated.');
   });
+}
+
+// ---------------------------------------------------------------------
+// Member funding: what they were given, what they spent, what is left
+// ---------------------------------------------------------------------
+
+function openFundsDialog(clientId) {
+  const c = clientById(clientId);
+  if (!c) return;
+  const b = balanceFor(clientId);
+  const grants = state.allocations.filter((a) => a.client_id === clientId);
+  const charges = state.transactions.filter((t) => {
+    if (!t.service_request_id || t.amount >= 0) return false;
+    const req = state.requests.find((r) => r.id === t.service_request_id);
+    const res = state.resources.find((x) => x.id === t.resource_id);
+    return req?.client_id === clientId && res?.kind === 'funding';
+  });
+  const pct = b.allocated > 0 ? Math.max(0, Math.min(100, (b.remaining / b.allocated) * 100)) : 0;
+
+  $('#funds-title').textContent = `${clientName(c)}: funding`;
+  $('#funds-body').innerHTML = `
+    <div class="kpis">
+      <div class="card kpi"><div class="label">Allocated</div><div class="value">${esc(fmtAmount('funding', b.allocated))}</div></div>
+      <div class="card kpi"><div class="label">Spent</div><div class="value">${esc(fmtAmount('funding', b.spent))}</div></div>
+      <div class="card kpi"><div class="label">Remaining</div><div class="value"${pct <= 15 ? ' style="color:var(--red)"' : ''}>${esc(fmtAmount('funding', b.remaining))}</div></div>
+    </div>
+    <div class="meter lg${pct <= 15 ? ' low' : ''}"><span style="width:${pct.toFixed(1)}%"></span></div>
+
+    <details class="panel" style="margin-top:16px">
+      <summary><strong>Add funds or make a correction</strong></summary>
+      <div class="form-grid two" style="margin-top:12px">
+        <label class="field">Amount <span class="hint">Use a negative number to take funds back</span>
+          <input id="fund-amount" type="number" step="0.01" placeholder="500" /></label>
+        <label class="field">Note<input id="fund-note" maxlength="200" placeholder="Additional grant" /></label>
+      </div>
+      <p class="form-error" id="fund-error" hidden></p>
+      <div class="toolbar"><button class="btn primary" id="fund-save">Save</button></div>
+    </details>
+
+    <h3 style="margin-top:20px">Allocations</h3>
+    <div class="card table-wrap">
+      <table><thead><tr><th>Date</th><th>Amount</th><th>Note</th><th>By</th><th></th></tr></thead>
+      <tbody>${grants.length ? grants.map((a) => `
+        <tr>
+          <td class="nowrap">${esc(fmtDate(a.granted_on))}</td>
+          <td class="num"${a.amount < 0 ? ' style="color:var(--red)"' : ''}>${esc(fmtAmount('funding', a.amount))}</td>
+          <td>${esc(a.note || '')}</td>
+          <td class="small muted">${esc(a.created_by || '')}</td>
+          <td style="text-align:right"><button class="btn sm ghost" data-del-alloc="${esc(a.id)}">Remove</button></td>
+        </tr>`).join('') : '<tr><td colspan="5" class="empty">No allocations yet.</td></tr>'}
+      </tbody></table>
+    </div>
+
+    <h3 style="margin-top:20px">What it was spent on</h3>
+    <div class="card table-wrap">
+      <table><thead><tr><th>Date</th><th>Amount</th><th>Service</th><th></th></tr></thead>
+      <tbody>${charges.length ? charges.map((t) => `
+        <tr>
+          <td class="nowrap">${esc(fmtDate(t.occurred_on))}</td>
+          <td class="num">${esc(fmtAmount('funding', Math.abs(t.amount)))}</td>
+          <td>${esc(t.description)}</td>
+          <td style="text-align:right"><button class="btn sm ghost" data-open-request="${esc(t.service_request_id)}">View</button></td>
+        </tr>`).join('') : '<tr><td colspan="4" class="empty">Nothing spent yet.</td></tr>'}
+      </tbody></table>
+    </div>`;
+
+  $('#fund-save').addEventListener('click', (e) => withBusy(e.target, async () => {
+    const err = $('#fund-error');
+    const amount = Number($('#fund-amount').value);
+    if (!amount) { err.textContent = 'Enter an amount.'; err.hidden = false; return; }
+    const { error } = await supabase.from('client_allocations').insert({
+      client_id: clientId, amount, note: $('#fund-note').value.trim() || null,
+    });
+    if (error) { err.textContent = errMsg(error); err.hidden = false; return; }
+    await loadAll();
+    openFundsDialog(clientId);
+    toast('Allocation saved.');
+  }));
+
+  $$('#funds-body [data-del-alloc]').forEach((btn) => btn.addEventListener('click', (e) =>
+    withBusy(e.target, async () => {
+      const yes = await confirmDialog(
+        `Remove this allocation? ${clientName(c)}'s balance will change.`, 'Remove', true);
+      if (!yes) return;
+      const { error } = await supabase.from('client_allocations').delete().eq('id', btn.dataset.delAlloc);
+      if (error) return toast(errMsg(error), 'error');
+      await loadAll();
+      openFundsDialog(clientId);
+      toast('Allocation removed.');
+    })));
+
+  $$('#funds-body [data-open-request]').forEach((btn) => btn.addEventListener('click', () => {
+    $('#dlg-funds').close();
+    openRequest(btn.dataset.openRequest);
+  }));
+
+  // This runs again after each save to refresh the numbers, so the
+  // dialog may already be open; showModal() throws if it is.
+  const dlg = $('#dlg-funds');
+  if (!dlg.open) dlg.showModal();
 }
 
 function openLinkDialog(clientId, justCreated = false) {
@@ -939,8 +1082,35 @@ function renderActivity() {
 // Staff access (admins only)
 // ---------------------------------------------------------------------
 
+// Admin-only. Changing the default affects new members only; existing
+// balances are left alone, which is why that is said on screen.
+function renderSettings() {
+  const current = state.settings.default_allocation ?? '';
+  $('#setting-default-allocation').value = current;
+  const btn = $('#setting-save');
+  if (btn.dataset.wired) return;
+  btn.dataset.wired = '1';
+  btn.addEventListener('click', (e) => withBusy(e.target, async () => {
+    const err = $('#setting-error');
+    const raw = $('#setting-default-allocation').value.trim();
+    const amount = Number(raw);
+    if (raw === '' || !Number.isFinite(amount) || amount < 0) {
+      err.textContent = 'Enter an amount of zero or more.';
+      err.hidden = false;
+      return;
+    }
+    err.hidden = true;
+    const { error } = await supabase.from('app_settings')
+      .update({ value: String(amount) }).eq('key', 'default_allocation');
+    if (error) { err.textContent = errMsg(error); err.hidden = false; return; }
+    await loadAll();
+    toast('Default allocation saved. New members will get this amount.');
+  }));
+}
+
 function renderStaff() {
   if (!state.isAdmin) return;
+  renderSettings();
   const me = state.me.email;
   $('#staff-body').innerHTML = state.staff.map((s) => `
     <tr data-email="${esc(s.email)}">

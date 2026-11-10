@@ -197,6 +197,24 @@ dialog.sheet .dialog-body { overflow-y: auto; max-height: calc(100vh - 60px); }
   font-size: 13px; padding: 10px 12px; border-radius: 8px; background: var(--amber-soft); color: #7a5313;
 }
 .notice.info { background: var(--blue-soft); color: #1f4c9a; }
+.notice.error { background: var(--red-soft); color: var(--red); }
+
+/* ---------- Balance meter ---------- */
+.meter {
+  height: 5px;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: var(--gray-soft);
+  overflow: hidden;
+}
+.meter span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--green);
+}
+.meter.low span { background: var(--red); }
+.meter.lg { height: 9px; margin-top: 12px; }
 
 /* ---------- Toasts ---------- */
 .toasts { position: fixed; right: 20px; bottom: 20px; display: grid; gap: 8px; z-index: 50; }

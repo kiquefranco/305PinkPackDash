@@ -11,6 +11,7 @@ Built by the Hyperion Council team, Fall 2026.
 | **Requests** | New requests appear on the dashboard live. Each one is tagged with its service and moves through Submitted, In review, Approved or Denied, and Fulfilled. Filter by service with the chips above the table. |
 | **Booking** | When a request is approved, staff record the provider, the confirmation number, and what it cost. The cost comes out of a funding pool or the voucher stock automatically. |
 | **Clients** | Staff add a client and send them a personal request link. Only people with a link can submit. Links can be turned off or replaced at any time. |
+| **Member funding** | Each member gets their own allocation ($2,000 by default, editable by an admin). Every funded service draws it down, and the clients table shows what is left. Booking is refused if a charge would take a member past their balance. |
 | **Resources** | Balances for funding and vouchers, with a full history of every addition and use. |
 | **Activity log** | Every change, who made it, and when. |
 | **Staff access** | Admins decide which Google accounts can sign in. |
@@ -133,6 +134,16 @@ GitHub Pages is free only for public repositories. A private repository with Pag
 
 **Complete:** After the service is delivered, click **Mark fulfilled**.
 
+### Member funding
+
+Every member added to the dashboard automatically receives the default allocation, shown in the Balance column on the Clients tab. Click **Funds** on a member's row to see what they were given, what they have spent and on what, and to add money or correct a mistake.
+
+A negative amount takes funds back, which is how you reverse a grant entered twice. Removing an allocation row does the same thing and leaves a record in the audit log either way.
+
+Vouchers are counted in units rather than dollars, so charging a ride to the voucher stock does not reduce a member's dollar balance.
+
+Admins set the default for new members under **Staff access > Member funding**. Changing it does not touch members who already exist.
+
 **Add funds or vouchers:** Resources > **Add** on the resource card. Record the source in the description (for example, "Grant from Miami Foundation").
 
 **Link shared with the wrong person:** Clients > Link > **Make a new link**. The old link stops working immediately.
@@ -160,6 +171,7 @@ Renaming or reshaping something that already holds data is different: `schema.sq
 | File | What it does | Run it if |
 |---|---|---|
 | `001_services.sql` | Turns ride requests into service requests covering rides, self-care, gift cards and child care | Your database was created before October 2026 and still has a `ride_requests` table |
+| `002_client_balances.sql` | Gives each member their own funding balance and blocks bookings that would exceed it | Your database has no `client_allocations` table. Run `001` first. |
 
 Migrations are safe to re-run. After running `001`, the client request form must be on the matching version of the code, since the function it calls was renamed.
 

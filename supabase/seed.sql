@@ -12,6 +12,6 @@ on conflict (email) do update set full_name = excluded.full_name, role = exclude
 -- Starting resources. Record opening balances from the dashboard
 -- (Resources > Record a change) so they show up in the audit trail.
 insert into public.resources (name, kind, notes) values
-  ('Ride funding',  'funding', 'Dollars available to pay for rides'),
-  ('Ride vouchers', 'voucher', 'Prepaid ride vouchers on hand')
+  ('Client funding', 'funding', 'Dollars available to pay for member services'),
+  ('Ride vouchers',  'voucher', 'Prepaid ride vouchers on hand')
 on conflict (name) do nothing;
