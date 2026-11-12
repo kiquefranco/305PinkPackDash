@@ -49,7 +49,9 @@ async function init() {
   renderSummary();
   renderCatalog();
   resetForm();
-  show('summary', 'catalog', 'form');
+  // An expired member still sees what they had and the catalog, but
+  // not a form the server would only reject.
+  show('summary', 'catalog', ...(member.expired ? [] : ['form']));
 }
 
 // ---------------------------------------------------------------------
@@ -83,7 +85,6 @@ function renderSummary() {
     n.textContent = `Your direct services ended on ${fmtDate(member.services_expire_on)}. `
       + `Please call us at ${ORG_PHONE} to talk about your options.`;
     n.hidden = false;
-    $('#state-form').hidden = true;
   }
 }
 
@@ -353,7 +354,7 @@ form().addEventListener('submit', async (e) => {
 
 $('#btn-another').addEventListener('click', () => {
   resetForm();
-  show('summary', 'catalog', 'form');
+  show('summary', 'catalog', ...(member.expired ? [] : ['form']));
   window.scrollTo(0, 0);
 });
 

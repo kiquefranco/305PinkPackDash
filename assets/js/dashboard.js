@@ -484,7 +484,9 @@ function renderRequestDrawer(id) {
         <datalist id="providers">${providerOptions(r.service_type).map((x) => `<option>${esc(x)}</option>`).join('')}</datalist>
         <p class="notice info" style="margin-top:4px">
           ${esc(clientName(c))} has <strong>${esc(fmtAmount('funding', bal.remaining))}</strong> left
-          of ${esc(fmtAmount('funding', bal.allocated))}.
+          of ${esc(fmtAmount('funding', bal.allocated))}.${Number(bal.committed) > 0
+            ? ` ${esc(fmtAmount('funding', bal.committed))} of that is promised to other requests still waiting, leaving ${esc(fmtAmount('funding', bal.available))} unspoken for.`
+            : ''}
         </p>
         <div class="form-grid two">
           <label class="field">Paid with
