@@ -7,8 +7,9 @@
 import {
   supabase, isConfigured, fmtDateTime, fmtDate, fmtAmount,
   toLocalInput, fromLocalInput, errMsg, esc,
-  SERVICE_TYPES, REASONS, REASONS_BY_SERVICE, NEEDED_AT_LABEL, usesAddresses,
-  GIFT_CARD_STORES, storeAllowsElectronic,
+  SERVICE_TYPES, SERVICE_SHORT, REASONS, REASONS_BY_SERVICE, NEEDED_AT_LABEL, usesAddresses,
+  GIFT_CARD_STORES, GIFT_CARD_FORMATS, GIFT_CARD_DELIVERY, CHILD_CARE_TYPES,
+  storeAllowsElectronic,
 } from './shared.js';
 import { ORG_PHONE } from './config.js';
 
@@ -21,8 +22,9 @@ for (const a of $$('.org-phone-link')) a.href = `tel:${ORG_PHONE.replace(/[^\d+]
 
 let member = null;
 let providers = [];
+let requests = [];
 
-const SECTIONS = ['loading', 'invalid', 'summary', 'catalog', 'form', 'done'];
+const SECTIONS = ['loading', 'invalid', 'summary', 'requests', 'catalog', 'form', 'done'];
 function show(...ids) {
   for (const s of SECTIONS) {
     const el = $(`#state-${s}`);
@@ -37,21 +39,25 @@ function show(...ids) {
 async function init() {
   if (!isConfigured || !/^[a-f0-9]{32}$/.test(token)) return show('invalid');
 
-  const [portal, catalog] = await Promise.all([
+  const [portal, catalog, mine] = await Promise.all([
     supabase.rpc('get_member_portal', { p_token: token }),
     supabase.rpc('list_member_providers', { p_token: token }),
+    supabase.rpc('list_member_requests', { p_token: token }),
   ]);
   if (portal.error || !portal.data?.length) return show('invalid');
 
   member = portal.data[0];
   providers = catalog.data || [];
+  requests = mine.data || [];
 
   renderSummary();
+  renderRequests();
   renderCatalog();
   resetForm();
   // An expired member still sees what they had and the catalog, but
   // not a form the server would only reject.
-  show('summary', 'catalog', ...(member.expired ? [] : ['form']));
+  show('summary', ...(requests.length ? ['requests'] : []),
+       'catalog', ...(member.expired ? [] : ['form']));
 }
 
 // ---------------------------------------------------------------------
@@ -86,6 +92,88 @@ function renderSummary() {
       + `Please call us at ${ORG_PHONE} to talk about your options.`;
     n.hidden = false;
   }
+}
+
+// ---------------------------------------------------------------------
+// Their own requests
+// ---------------------------------------------------------------------
+
+const OPEN_STATUSES = ['submitted', 'in_review', 'approved'];
+
+// Said from the member's side: what is happening and what they do next.
+const STATUS_TEXT = {
+  submitted: ['Waiting for review', 'We have your request and will be in touch.'],
+  in_review: ['Being reviewed', 'Someone at Pink Pack is working on this now.'],
+  approved: ['Approved', 'We are arranging it. We will contact you to confirm.'],
+  fulfilled: ['Done', ''],
+  denied: ['Not approved', 'Please call us if you would like to talk about this.'],
+};
+
+// The one-line description of what was asked for.
+function requestDetail(r) {
+  switch (r.service_type) {
+    case 'ride':
+      return [r.pickup_address, r.dropoff_address].filter(Boolean).join(' to ')
+        + (r.return_trip ? ', with a ride home' : '');
+    case 'self_care':
+      return r.provider_name || '';
+    case 'gift_card':
+      return [GIFT_CARD_STORES[r.gift_card_store],
+        (GIFT_CARD_FORMATS[r.gift_card_format] || '').toLowerCase(),
+        GIFT_CARD_DELIVERY[r.gift_card_delivery]].filter(Boolean).join(', ');
+    case 'child_care':
+      return [CHILD_CARE_TYPES[r.child_care_type], r.vendor_name, r.service_period]
+        .filter(Boolean).join(' · ');
+    default:
+      return '';
+  }
+}
+
+// What this request costs them. Once paid, the real charge; before that,
+// what they asked for, clearly marked as not yet taken.
+function requestAmount(r) {
+  if (r.charged_amount != null) {
+    return `<span class="req-amount">${esc(fmtAmount('funding', r.charged_amount))}</span>
+            <span class="req-amount-note">used</span>`;
+  }
+  if (r.requested_amount != null) {
+    const taken = r.status === 'denied' ? 'not taken from your balance' : 'held for now';
+    return `<span class="req-amount">${esc(fmtAmount('funding', r.requested_amount))}</span>
+            <span class="req-amount-note">${esc(taken)}</span>`;
+  }
+  return '';
+}
+
+function requestCard(r) {
+  const [label, next] = STATUS_TEXT[r.status] || [r.status, ''];
+  const detail = requestDetail(r);
+  return `
+    <li class="req ${esc(r.status)}">
+      <div class="req-head">
+        <div>
+          <span class="pill service ${esc(r.service_type)}">${esc(SERVICE_SHORT[r.service_type] || r.service_type)}</span>
+          <span class="pill ${esc(r.status)}">${esc(label)}</span>
+        </div>
+        ${requestAmount(r)}
+      </div>
+      <div class="req-when">${esc(fmtDateTime(r.needed_at))}</div>
+      ${detail ? `<div class="req-detail">${esc(detail)}</div>` : ''}
+      ${r.confirmation_code ? `<div class="req-confirm">Confirmation ${esc(r.confirmation_code)}</div>` : ''}
+      ${next ? `<div class="req-next">${esc(next)}</div>` : ''}
+    </li>`;
+}
+
+function renderRequests() {
+  const open = requests.filter((r) => OPEN_STATUSES.includes(r.status));
+  const past = requests.filter((r) => !OPEN_STATUSES.includes(r.status));
+
+  $('#requests-open').innerHTML = open.length
+    ? `<h3>Waiting on us</h3><ul class="req-list">${open.map(requestCard).join('')}</ul>`
+    : '<p class="muted small">You have no requests waiting right now.</p>';
+
+  $('#requests-past').innerHTML = past.length
+    ? `<h3 style="margin-top:18px">Earlier requests</h3><ul class="req-list">${past.map(requestCard).join('')}</ul>`
+    : '';
 }
 
 // ---------------------------------------------------------------------
@@ -347,14 +435,20 @@ form().addEventListener('submit', async (e) => {
   show('summary', 'done');
   window.scrollTo(0, 0);
 
-  // The balance moved, so the page should not keep showing the old one.
-  const { data } = await supabase.rpc('get_member_portal', { p_token: token });
-  if (data?.length) { member = data[0]; renderSummary(); }
+  // The balance moved and there is a new request to show, so neither
+  // should still be showing what they were before this submission.
+  const [portal, mine] = await Promise.all([
+    supabase.rpc('get_member_portal', { p_token: token }),
+    supabase.rpc('list_member_requests', { p_token: token }),
+  ]);
+  if (portal.data?.length) { member = portal.data[0]; renderSummary(); }
+  if (mine.data) { requests = mine.data; renderRequests(); }
 });
 
 $('#btn-another').addEventListener('click', () => {
   resetForm();
-  show('summary', 'catalog', ...(member.expired ? [] : ['form']));
+  show('summary', ...(requests.length ? ['requests'] : []),
+       'catalog', ...(member.expired ? [] : ['form']));
   window.scrollTo(0, 0);
 });
 

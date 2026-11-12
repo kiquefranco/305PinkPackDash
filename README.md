@@ -139,6 +139,10 @@ GitHub Pages is free only for public repositories. A private repository with Pag
 
 Each member's private link opens a page showing when they joined, whether their direct services have an end date, how much funding they have left, and everything they can spend it on. From there they can request a ride, a self-care service, a grocery gift card, or child care help.
 
+They also see every request they have made: what is still waiting on Pink Pack, and what happened to the rest. An open request shows the amount as held rather than spent; a fulfilled one shows what was actually used and its confirmation code; a denied one says plainly that nothing came off their balance.
+
+Staff decision notes are never shown to members. Those are written by staff for each other, so if Pink Pack wants to explain a denial to a member, that needs a separate field written for the member to read.
+
 Two rules are enforced on the server, not just in the browser:
 
 - A member cannot request more than they have available. Requests already waiting for review are held against the balance, so four small requests cannot quietly add up to more than their allocation.
@@ -191,6 +195,7 @@ Renaming or reshaping something that already holds data is different: `schema.sq
 | `001_services.sql` | Turns ride requests into service requests covering rides, self-care, gift cards and child care | Your database was created before October 2026 and still has a `ride_requests` table |
 | `002_client_balances.sql` | Gives each member their own funding balance and blocks bookings that would exceed it | Your database has no `client_allocations` table. Run `001` first. |
 | `003_members_and_providers.sql` | Adds join date, group and expiration; the provider directory with Rosemary's vendors; and the fields each service needs | Your database has no `providers` table. Run `001` and `002` first. |
+| `004_member_requests.sql` | Lets members see their own requests on their page | Your database has no `list_member_requests` function. Run `001` to `003` first. |
 
 Migrations are safe to re-run, but run them in order and do not go back to an older one after a newer one. After running `001` or `003`, the member page must be on the matching version of the code, since the function it calls changed.
 
