@@ -251,8 +251,6 @@ dialog.sheet .dialog-body { overflow-y: auto; max-height: calc(100vh - 60px); }
 .public h2 { font-size: 17px; }
 
 /* ---------- Member page ---------- */
-.member-greeting { font-size: 18px; font-weight: 700; }
-
 .balance-hero {
   margin-top: 14px;
   padding: 18px;
@@ -293,7 +291,23 @@ dialog.sheet .dialog-body { overflow-y: auto; max-height: calc(100vh - 60px); }
   font-weight: 700; color: var(--pink-dark); white-space: nowrap; font-variant-numeric: tabular-nums;
 }
 
+/* ---------- Collapsible card ---------- */
+.collapsible > summary {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; cursor: pointer; list-style: none;
+}
+.collapsible > summary::-webkit-details-marker { display: none; }
+.collapsible > summary h2 { margin: 0; }
+.collapsible > summary .chev {
+  width: 9px; height: 9px; flex: none;
+  border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted);
+  transform: rotate(45deg); transition: transform .15s ease;
+}
+.collapsible[open] > summary .chev { transform: rotate(-135deg); }
+.collapsible > summary:focus-visible { outline: 2px solid var(--pink); outline-offset: 3px; border-radius: 6px; }
+
 /* ---------- A member's own requests ---------- */
+#requests-open h3, #requests-past h3 { margin-top: 14px; }
 .req-list { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 10px; }
 .req {
   padding: 12px;

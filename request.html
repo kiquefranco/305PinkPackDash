@@ -27,7 +27,6 @@
 
     <!-- Membership summary -->
     <div id="state-summary" class="card" hidden>
-      <p id="greeting" class="member-greeting"></p>
       <div class="balance-hero">
         <div class="balance-label">Funds remaining</div>
         <div class="balance-amount" id="balance-amount">$0.00</div>
@@ -41,18 +40,11 @@
       <p class="notice" id="expired-notice" hidden></p>
     </div>
 
-    <!-- Your requests -->
-    <div id="state-requests" class="card" hidden>
-      <h2>Your requests</h2>
-      <div id="requests-open"></div>
-      <div id="requests-past"></div>
-    </div>
-
     <!-- What you can request -->
-    <div id="state-catalog" class="card" hidden>
-      <h2>What you can request</h2>
+    <details id="state-catalog" class="card collapsible" hidden>
+      <summary><h2>What you can request</h2><span class="chev" aria-hidden="true"></span></summary>
       <div id="catalog"></div>
-    </div>
+    </details>
 
     <!-- Request form -->
     <form id="state-form" class="card" hidden novalidate>
@@ -174,6 +166,13 @@
       <p class="muted" id="done-summary"></p>
       <p class="muted" id="done-next"></p>
       <div><button class="btn" id="btn-another">Make another request</button></div>
+    </div>
+
+    <!-- Your requests -->
+    <div id="state-requests" class="card" hidden>
+      <h2>Your requests</h2>
+      <div id="requests-open"></div>
+      <div id="requests-past"></div>
     </div>
 
     <p class="foot">In a medical emergency, call 911.</p>

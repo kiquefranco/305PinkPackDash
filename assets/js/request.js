@@ -66,7 +66,6 @@ async function init() {
 
 function renderSummary() {
   $('#page-title').textContent = `Hi ${member.first_name}`;
-  $('#greeting').textContent = `Hi ${member.first_name}`;
 
   const available = Number(member.available);
   const allocated = Number(member.allocated);
